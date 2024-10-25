@@ -1187,7 +1187,7 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
 
                         sym::rust_logo => {
                             if self.check_attr_crate_level(attr, meta, hir_id)
-                                && !self.tcx.features().rustdoc_internals
+                                && !self.tcx.features().rustdoc_internals()
                             {
                                 feature_err(
                                     &self.tcx.sess,
@@ -1774,7 +1774,7 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
                 }
                 sym::align => {
                     if let (Target::Fn | Target::Method(MethodKind::Inherent), false) =
-                        (target, self.tcx.features().fn_align)
+                        (target, self.tcx.features().fn_align())
                     {
                         feature_err(
                             &self.tcx.sess,
@@ -2300,10 +2300,10 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
                 &mut diag,
                 &cause,
                 None,
-                Some(ValuePairs::PolySigs(ExpectedFound {
+                Some(param_env.and(ValuePairs::PolySigs(ExpectedFound {
                     expected: ty::Binder::dummy(expected_sig),
                     found: ty::Binder::dummy(sig),
-                })),
+                }))),
                 terr,
                 false,
             );
