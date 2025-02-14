@@ -316,13 +316,16 @@ impl<'infcx, 'tcx> MirBorrowckCtxt<'_, 'infcx, 'tcx> {
                     let type_test_span = type_test.span;
 
                     if let Some(lower_bound_region) = lower_bound_region {
-                        let generic_ty = type_test.generic_kind.to_ty(self.infcx.tcx);
+                        let generic_ty = self.regioncx.name_regions(
+                            self.infcx.tcx,
+                            type_test.generic_kind.to_ty(self.infcx.tcx),
+                        );
                         let origin = RelateParamBound(type_test_span, generic_ty, None);
                         self.buffer_error(self.infcx.err_ctxt().construct_generic_bound_failure(
                             self.body.source.def_id().expect_local(),
                             type_test_span,
                             Some(origin),
-                            type_test.generic_kind,
+                            self.regioncx.name_regions(self.infcx.tcx, type_test.generic_kind),
                             lower_bound_region,
                         ));
                     } else {
@@ -1100,12 +1103,15 @@ impl<'infcx, 'tcx> MirBorrowckCtxt<'_, 'infcx, 'tcx> {
         let closure_ty = Ty::new_closure(
             tcx,
             closure_def_id.to_def_id(),
-            ty::ClosureArgs::new(tcx, ty::ClosureArgsParts {
-                parent_args: args.parent_args(),
-                closure_kind_ty: args.kind_ty(),
-                tupled_upvars_ty: args.tupled_upvars_ty(),
-                closure_sig_as_fn_ptr_ty,
-            })
+            ty::ClosureArgs::new(
+                tcx,
+                ty::ClosureArgsParts {
+                    parent_args: args.parent_args(),
+                    closure_kind_ty: args.kind_ty(),
+                    tupled_upvars_ty: args.tupled_upvars_ty(),
+                    closure_sig_as_fn_ptr_ty,
+                },
+            )
             .args,
         );
 

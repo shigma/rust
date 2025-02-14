@@ -84,10 +84,10 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             }
 
             let adj_ty = self.next_ty_var(expr.span);
-            self.apply_adjustments(expr, vec![Adjustment {
-                kind: Adjust::NeverToAny,
-                target: adj_ty,
-            }]);
+            self.apply_adjustments(
+                expr,
+                vec![Adjustment { kind: Adjust::NeverToAny, target: adj_ty }],
+            );
             ty = adj_ty;
         }
 
@@ -3556,7 +3556,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                         }
                     }
 
-                    if base_t.is_unsafe_ptr() && idx_t.is_integral() {
+                    if base_t.is_raw_ptr() && idx_t.is_integral() {
                         err.multipart_suggestion(
                             "consider using `wrapping_add` or `add` for indexing into raw pointer",
                             vec![

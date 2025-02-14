@@ -1949,7 +1949,8 @@ impl<'tcx> SelectionContext<'_, 'tcx> {
                 | TraitAliasCandidate
                 | TraitUpcastingUnsizeCandidate(_)
                 | BuiltinObjectCandidate
-                | BuiltinUnsizeCandidate => false,
+                | BuiltinUnsizeCandidate
+                | BikeshedGuaranteedNoDropCandidate => false,
                 // Non-global param candidates have already been handled, global
                 // where-bounds get ignored.
                 ParamCandidate(_) | ImplCandidate(_) => true,
@@ -2422,9 +2423,11 @@ impl<'tcx> SelectionContext<'_, 'tcx> {
                 } else {
                     // If this is an ill-formed auto/built-in trait, then synthesize
                     // new error args for the missing generics.
-                    let err_args = ty::GenericArgs::extend_with_error(tcx, trait_def_id, &[
-                        normalized_ty.into(),
-                    ]);
+                    let err_args = ty::GenericArgs::extend_with_error(
+                        tcx,
+                        trait_def_id,
+                        &[normalized_ty.into()],
+                    );
                     ty::TraitRef::new_from_args(tcx, trait_def_id, err_args)
                 };
 

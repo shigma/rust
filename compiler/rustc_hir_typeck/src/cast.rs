@@ -666,11 +666,12 @@ impl<'a, 'tcx> CastCheck<'tcx> {
         };
         let expr_ty = fcx.resolve_vars_if_possible(self.expr_ty);
         let cast_ty = fcx.resolve_vars_if_possible(self.cast_ty);
-        fcx.tcx.emit_node_span_lint(lint, self.expr.hir_id, self.span, errors::TrivialCast {
-            numeric,
-            expr_ty,
-            cast_ty,
-        });
+        fcx.tcx.emit_node_span_lint(
+            lint,
+            self.expr.hir_id,
+            self.span,
+            errors::TrivialCast { numeric, expr_ty, cast_ty },
+        );
     }
 
     #[instrument(skip(fcx), level = "debug")]
@@ -689,7 +690,7 @@ impl<'a, 'tcx> CastCheck<'tcx> {
         } else {
             match self.try_coercion_cast(fcx) {
                 Ok(()) => {
-                    if self.expr_ty.is_unsafe_ptr() && self.cast_ty.is_unsafe_ptr() {
+                    if self.expr_ty.is_raw_ptr() && self.cast_ty.is_raw_ptr() {
                         // When casting a raw pointer to another raw pointer, we cannot convert the cast into
                         // a coercion because the pointee types might only differ in regions, which HIR typeck
                         // cannot distinguish. This would cause us to erroneously discard a cast which will

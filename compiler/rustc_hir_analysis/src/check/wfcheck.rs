@@ -12,6 +12,7 @@ use rustc_hir::lang_items::LangItem;
 use rustc_hir::{AmbigArg, ItemKind};
 use rustc_infer::infer::outlives::env::OutlivesEnvironment;
 use rustc_infer::infer::{self, InferCtxt, TyCtxtInferExt};
+use rustc_lint_defs::builtin::SUPERTRAIT_ITEM_SHADOWING_DEFINITION;
 use rustc_macros::LintDiagnostic;
 use rustc_middle::mir::interpret::ErrorHandled;
 use rustc_middle::query::Providers;
@@ -388,7 +389,12 @@ fn check_trait_item<'tcx>(
         hir::TraitItemKind::Type(_bounds, Some(ty)) => (None, ty.span),
         _ => (None, trait_item.span),
     };
+
     check_dyn_incompatible_self_trait_by_name(tcx, trait_item);
+
+    // Check that an item definition in a subtrait is shadowing a supertrait item.
+    lint_item_shadowing_supertrait_item(tcx, def_id);
+
     let mut res = check_associated_item(tcx, def_id, span, method_sig);
 
     if matches!(trait_item.kind, hir::TraitItemKind::Fn(..)) {
@@ -675,10 +681,10 @@ fn gather_gat_bounds<'tcx, T: TypeFoldable<TyCtxt<'tcx>>>(
                 // Same for the region. In our example, 'a corresponds
                 // to the 'me parameter.
                 let region_param = gat_generics.param_at(*region_a_idx, tcx);
-                let region_param = ty::Region::new_early_param(tcx, ty::EarlyParamRegion {
-                    index: region_param.index,
-                    name: region_param.name,
-                });
+                let region_param = ty::Region::new_early_param(
+                    tcx,
+                    ty::EarlyParamRegion { index: region_param.index, name: region_param.name },
+                );
                 // The predicate we expect to see. (In our example,
                 // `Self: 'me`.)
                 bounds.insert(
@@ -704,16 +710,16 @@ fn gather_gat_bounds<'tcx, T: TypeFoldable<TyCtxt<'tcx>>>(
                 debug!("required clause: {region_a} must outlive {region_b}");
                 // Translate into the generic parameters of the GAT.
                 let region_a_param = gat_generics.param_at(*region_a_idx, tcx);
-                let region_a_param = ty::Region::new_early_param(tcx, ty::EarlyParamRegion {
-                    index: region_a_param.index,
-                    name: region_a_param.name,
-                });
+                let region_a_param = ty::Region::new_early_param(
+                    tcx,
+                    ty::EarlyParamRegion { index: region_a_param.index, name: region_a_param.name },
+                );
                 // Same for the region.
                 let region_b_param = gat_generics.param_at(*region_b_idx, tcx);
-                let region_b_param = ty::Region::new_early_param(tcx, ty::EarlyParamRegion {
-                    index: region_b_param.index,
-                    name: region_b_param.name,
-                });
+                let region_b_param = ty::Region::new_early_param(
+                    tcx,
+                    ty::EarlyParamRegion { index: region_b_param.index, name: region_b_param.name },
+                );
                 // The predicate we expect to see.
                 bounds.insert(
                     ty::ClauseKind::RegionOutlives(ty::OutlivesPredicate(
@@ -895,6 +901,45 @@ fn check_dyn_incompatible_self_trait_by_name(tcx: TyCtxt<'_>, item: &hir::TraitI
                 Applicability::MachineApplicable,
             )
             .emit();
+    }
+}
+
+fn lint_item_shadowing_supertrait_item<'tcx>(tcx: TyCtxt<'tcx>, trait_item_def_id: LocalDefId) {
+    let item_name = tcx.item_name(trait_item_def_id.to_def_id());
+    let trait_def_id = tcx.local_parent(trait_item_def_id);
+
+    let shadowed: Vec<_> = traits::supertrait_def_ids(tcx, trait_def_id.to_def_id())
+        .skip(1)
+        .flat_map(|supertrait_def_id| {
+            tcx.associated_items(supertrait_def_id).filter_by_name_unhygienic(item_name)
+        })
+        .collect();
+    if !shadowed.is_empty() {
+        let shadowee = if let [shadowed] = shadowed[..] {
+            errors::SupertraitItemShadowee::Labeled {
+                span: tcx.def_span(shadowed.def_id),
+                supertrait: tcx.item_name(shadowed.trait_container(tcx).unwrap()),
+            }
+        } else {
+            let (traits, spans): (Vec<_>, Vec<_>) = shadowed
+                .iter()
+                .map(|item| {
+                    (tcx.item_name(item.trait_container(tcx).unwrap()), tcx.def_span(item.def_id))
+                })
+                .unzip();
+            errors::SupertraitItemShadowee::Several { traits: traits.into(), spans: spans.into() }
+        };
+
+        tcx.emit_node_span_lint(
+            SUPERTRAIT_ITEM_SHADOWING_DEFINITION,
+            tcx.local_def_id_to_hir_id(trait_item_def_id),
+            tcx.def_span(trait_item_def_id),
+            errors::SupertraitItemShadowing {
+                item: item_name,
+                subtrait: tcx.item_name(trait_def_id.to_def_id()),
+                shadowee,
+            },
+        );
     }
 }
 
@@ -1647,10 +1692,15 @@ fn check_fn_or_method<'tcx>(
     }
 
     // If the function has a body, additionally require that the return type is sized.
-    check_sized_if_body(wfcx, def_id, sig.output(), match hir_decl.output {
-        hir::FnRetTy::Return(ty) => Some(ty.span),
-        hir::FnRetTy::DefaultReturn(_) => None,
-    });
+    check_sized_if_body(
+        wfcx,
+        def_id,
+        sig.output(),
+        match hir_decl.output {
+            hir::FnRetTy::Return(ty) => Some(ty.span),
+            hir::FnRetTy::DefaultReturn(_) => None,
+        },
+    );
 }
 
 fn check_sized_if_body<'tcx>(

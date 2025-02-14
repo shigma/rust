@@ -394,7 +394,6 @@ trigger_files = [
     "src/tools/tidy",
     "src/tools/rustdoc-gui-test",
     "src/tools/libcxx-version",
-    "src/tools/rustc-perf-wrapper",
     "x.py",
     "x",
     "x.ps1"
@@ -1042,9 +1041,7 @@ warn_non_default_branch.enable = true
 contributing_url = "https://rustc-dev-guide.rust-lang.org/getting-started.html"
 users_on_vacation = [
     "jyn514",
-    "nnethercote",
     "workingjubilee",
-    "kobzol",
 ]
 
 [[assign.warn_non_default_branch.exceptions]]
@@ -1058,7 +1055,6 @@ branch = "stable"
 [assign.adhoc_groups]
 compiler = [
     "@BoxyUwU",
-    "@chenyukang",
     "@cjgillot",
     "@compiler-errors",
     "@davidtwco",
@@ -1098,6 +1094,8 @@ bootstrap = [
 infra-ci = [
     "@Mark-Simulacrum",
     "@Kobzol",
+    "@marcoieni",
+    "@jdno",
 ]
 rustdoc = [
     "@GuillaumeGomez",
