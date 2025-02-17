@@ -9,6 +9,7 @@ use std::sync::Arc;
 use crate::source::{SpanRangeExt, walk_span_to_context};
 use crate::{clip, is_direct_expn_of, sext, unsext};
 
+use rustc_abi::Size;
 use rustc_apfloat::Float;
 use rustc_apfloat::ieee::{Half, Quad};
 use rustc_ast::ast::{self, LitFloatType, LitKind};
@@ -25,7 +26,6 @@ use rustc_middle::{bug, mir, span_bug};
 use rustc_span::def_id::DefId;
 use rustc_span::symbol::Ident;
 use rustc_span::{SyntaxContext, sym};
-use rustc_target::abi::Size;
 use std::cell::Cell;
 use std::cmp::Ordering;
 use std::hash::{Hash, Hasher};
@@ -455,7 +455,7 @@ impl<'tcx> ConstEvalCtxt<'tcx> {
                     Some(val)
                 }
             },
-            PatExprKind::ConstBlock(ConstBlock { body, .. }) => self.expr(self.tcx.hir().body(*body).value),
+            PatExprKind::ConstBlock(ConstBlock { body, .. }) => self.expr(self.tcx.hir_body(*body).value),
             PatExprKind::Path(qpath) => self.qpath(qpath, pat_expr.hir_id),
         }
     }
@@ -483,7 +483,7 @@ impl<'tcx> ConstEvalCtxt<'tcx> {
     /// Simple constant folding: Insert an expression, get a constant or none.
     fn expr(&self, e: &Expr<'_>) -> Option<Constant<'tcx>> {
         match e.kind {
-            ExprKind::ConstBlock(ConstBlock { body, .. }) => self.expr(self.tcx.hir().body(body).value),
+            ExprKind::ConstBlock(ConstBlock { body, .. }) => self.expr(self.tcx.hir_body(body).value),
             ExprKind::DropTemps(e) => self.expr(e),
             ExprKind::Path(ref qpath) => self.qpath(qpath, e.hir_id),
             ExprKind::Block(block, _) => self.block(block),
@@ -550,7 +550,7 @@ impl<'tcx> ConstEvalCtxt<'tcx> {
     /// leaves the local crate.
     pub fn eval_is_empty(&self, e: &Expr<'_>) -> Option<bool> {
         match e.kind {
-            ExprKind::ConstBlock(ConstBlock { body, .. }) => self.eval_is_empty(self.tcx.hir().body(body).value),
+            ExprKind::ConstBlock(ConstBlock { body, .. }) => self.eval_is_empty(self.tcx.hir_body(body).value),
             ExprKind::DropTemps(e) => self.eval_is_empty(e),
             ExprKind::Path(ref qpath) => {
                 if !self
@@ -645,7 +645,7 @@ impl<'tcx> ConstEvalCtxt<'tcx> {
             Res::Def(DefKind::Const | DefKind::AssocConst, def_id) => {
                 // Check if this constant is based on `cfg!(..)`,
                 // which is NOT constant for our purposes.
-                if let Some(node) = self.tcx.hir().get_if_local(def_id)
+                if let Some(node) = self.tcx.hir_get_if_local(def_id)
                     && let Node::Item(Item {
                         kind: ItemKind::Const(.., body_id),
                         ..

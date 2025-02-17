@@ -9,6 +9,7 @@ use rustc_abi::{
     HasDataLayout, Layout, LayoutCalculatorError, LayoutData, Niche, ReprOptions, Scalar, Size,
     StructKind, TagEncoding, VariantIdx, Variants, WrappingRange,
 };
+use rustc_hashes::Hash64;
 use rustc_index::bit_set::DenseBitSet;
 use rustc_index::{IndexSlice, IndexVec};
 use rustc_middle::bug;
@@ -240,14 +241,20 @@ fn layout_of_uncached<'tcx>(
         }
 
         // Basic scalars.
-        ty::Bool => tcx.mk_layout(LayoutData::scalar(cx, Scalar::Initialized {
-            value: Int(I8, false),
-            valid_range: WrappingRange { start: 0, end: 1 },
-        })),
-        ty::Char => tcx.mk_layout(LayoutData::scalar(cx, Scalar::Initialized {
-            value: Int(I32, false),
-            valid_range: WrappingRange { start: 0, end: 0x10FFFF },
-        })),
+        ty::Bool => tcx.mk_layout(LayoutData::scalar(
+            cx,
+            Scalar::Initialized {
+                value: Int(I8, false),
+                valid_range: WrappingRange { start: 0, end: 1 },
+            },
+        )),
+        ty::Char => tcx.mk_layout(LayoutData::scalar(
+            cx,
+            Scalar::Initialized {
+                value: Int(I32, false),
+                valid_range: WrappingRange { start: 0, end: 0x10FFFF },
+            },
+        )),
         ty::Int(ity) => scalar(Int(abi::Integer::from_int_ty(dl, ity), true)),
         ty::Uint(ity) => scalar(Int(abi::Integer::from_uint_ty(dl, ity), false)),
         ty::Float(fty) => scalar(Float(abi::Float::from_float_ty(fty))),
@@ -263,7 +270,7 @@ fn layout_of_uncached<'tcx>(
         // Potentially-wide pointers.
         ty::Ref(_, pointee, _) | ty::RawPtr(pointee, _) => {
             let mut data_ptr = scalar_unit(Pointer(AddressSpace::DATA));
-            if !ty.is_unsafe_ptr() {
+            if !ty.is_raw_ptr() {
                 data_ptr.valid_range_mut().start = 1;
             }
 
@@ -374,7 +381,7 @@ fn layout_of_uncached<'tcx>(
                 size,
                 max_repr_align: None,
                 unadjusted_abi_align: element.align.abi,
-                randomization_seed: element.randomization_seed.wrapping_add(count),
+                randomization_seed: element.randomization_seed.wrapping_add(Hash64::new(count)),
             })
         }
         ty::Slice(element) => {
@@ -389,7 +396,9 @@ fn layout_of_uncached<'tcx>(
                 max_repr_align: None,
                 unadjusted_abi_align: element.align.abi,
                 // adding a randomly chosen value to distinguish slices
-                randomization_seed: element.randomization_seed.wrapping_add(0x2dcba99c39784102),
+                randomization_seed: element
+                    .randomization_seed
+                    .wrapping_add(Hash64::new(0x2dcba99c39784102)),
             })
         }
         ty::Str => tcx.mk_layout(LayoutData {
@@ -402,7 +411,7 @@ fn layout_of_uncached<'tcx>(
             max_repr_align: None,
             unadjusted_abi_align: dl.i8_align.abi,
             // another random value
-            randomization_seed: 0xc1325f37d127be22,
+            randomization_seed: Hash64::new(0xc1325f37d127be22),
         }),
 
         // Odd unit types.
@@ -551,10 +560,13 @@ fn layout_of_uncached<'tcx>(
                 // Non-power-of-two vectors have padding up to the next power-of-two.
                 // If we're a packed repr, remove the padding while keeping the alignment as close
                 // to a vector as possible.
-                (BackendRepr::Memory { sized: true }, AbiAndPrefAlign {
-                    abi: Align::max_for_offset(size),
-                    pref: dl.vector_align(size).pref,
-                })
+                (
+                    BackendRepr::Memory { sized: true },
+                    AbiAndPrefAlign {
+                        abi: Align::max_for_offset(size),
+                        pref: dl.vector_align(size).pref,
+                    },
+                )
             } else {
                 (BackendRepr::Vector { element: e_abi, count: e_len }, dl.vector_align(size))
             };
@@ -576,7 +588,7 @@ fn layout_of_uncached<'tcx>(
                 align,
                 max_repr_align: None,
                 unadjusted_abi_align: align.abi,
-                randomization_seed: e_ly.randomization_seed.wrapping_add(e_len),
+                randomization_seed: e_ly.randomization_seed.wrapping_add(Hash64::new(e_len)),
             })
         }
 
@@ -1042,7 +1054,7 @@ fn coroutine_layout<'tcx>(
     };
 
     // this is similar to how ReprOptions populates its field_shuffle_seed
-    let def_hash = tcx.def_path_hash(def_id).0.to_smaller_hash().as_u64();
+    let def_hash = tcx.def_path_hash(def_id).0.to_smaller_hash();
 
     let layout = tcx.mk_layout(LayoutData {
         variants: Variants::Multiple {
@@ -1179,10 +1191,13 @@ fn variant_info_for_adt<'tcx>(
                 })
                 .collect();
 
-            (variant_infos, match tag_encoding {
-                TagEncoding::Direct => Some(tag.size(cx)),
-                _ => None,
-            })
+            (
+                variant_infos,
+                match tag_encoding {
+                    TagEncoding::Direct => Some(tag.size(cx)),
+                    _ => None,
+                },
+            )
         }
     }
 }
@@ -1302,8 +1317,11 @@ fn variant_info_for_coroutine<'tcx>(
     let end_states: Vec<_> = end_states.collect();
     variant_infos.extend(end_states);
 
-    (variant_infos, match tag_encoding {
-        TagEncoding::Direct => Some(tag.size(cx)),
-        _ => None,
-    })
+    (
+        variant_infos,
+        match tag_encoding {
+            TagEncoding::Direct => Some(tag.size(cx)),
+            _ => None,
+        },
+    )
 }

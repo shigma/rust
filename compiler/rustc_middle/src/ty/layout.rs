@@ -11,6 +11,7 @@ use rustc_error_messages::DiagMessage;
 use rustc_errors::{
     Diag, DiagArgValue, DiagCtxtHandle, Diagnostic, EmissionGuarantee, IntoDiagArg, Level,
 };
+use rustc_hashes::Hash64;
 use rustc_hir::LangItem;
 use rustc_hir::def_id::DefId;
 use rustc_index::IndexVec;
@@ -24,7 +25,6 @@ use rustc_target::spec::{
 use tracing::debug;
 use {rustc_abi as abi, rustc_hir as hir};
 
-use crate::error::UnsupportedFnAbi;
 use crate::middle::codegen_fn_attrs::CodegenFnAttrFlags;
 use crate::query::TyCtxtAt;
 use crate::ty::normalize_erasing_regions::NormalizationError;
@@ -369,7 +369,7 @@ impl<'tcx> SizeSkeleton<'tcx> {
 
         match *ty.kind() {
             ty::Ref(_, pointee, _) | ty::RawPtr(pointee, _) => {
-                let non_zero = !ty.is_unsafe_ptr();
+                let non_zero = !ty.is_raw_ptr();
 
                 let tail = tcx.struct_tail_raw(
                     pointee,
@@ -779,7 +779,7 @@ where
                     size: Size::ZERO,
                     max_repr_align: None,
                     unadjusted_abi_align: tcx.data_layout.i8_align.abi,
-                    randomization_seed: 0,
+                    randomization_seed: Hash64::ZERO,
                 })
             }
 
@@ -841,7 +841,7 @@ where
                     // as the `Abi` or `FieldsShape` is checked by users.
                     if i == 0 {
                         let nil = tcx.types.unit;
-                        let unit_ptr_ty = if this.ty.is_unsafe_ptr() {
+                        let unit_ptr_ty = if this.ty.is_raw_ptr() {
                             Ty::new_mut_ptr(tcx, nil)
                         } else {
                             Ty::new_mut_ref(tcx, tcx.lifetimes.re_static, nil)
@@ -1275,18 +1275,12 @@ pub fn fn_can_unwind(tcx: TyCtxt<'_>, fn_def_id: Option<DefId>, abi: ExternAbi) 
 pub enum FnAbiError<'tcx> {
     /// Error produced by a `layout_of` call, while computing `FnAbi` initially.
     Layout(LayoutError<'tcx>),
-
-    /// Error produced by attempting to adjust a `FnAbi`, for a "foreign" ABI.
-    AdjustForForeignAbi(rustc_target::callconv::AdjustForForeignAbiError),
 }
 
 impl<'a, 'b, G: EmissionGuarantee> Diagnostic<'a, G> for FnAbiError<'b> {
     fn into_diag(self, dcx: DiagCtxtHandle<'a>, level: Level) -> Diag<'a, G> {
         match self {
             Self::Layout(e) => e.into_diagnostic().into_diag(dcx, level),
-            Self::AdjustForForeignAbi(
-                rustc_target::callconv::AdjustForForeignAbiError::Unsupported { arch, abi },
-            ) => UnsupportedFnAbi { arch, abi: abi.name() }.into_diag(dcx, level),
         }
     }
 }
@@ -1369,10 +1363,11 @@ pub trait FnAbiOf<'tcx>: FnAbiOfHelpers<'tcx> {
                     // `def_span` unconditionally (which may have a perf penalty).
                     let span =
                         if !span.is_dummy() { span } else { tcx.def_span(instance.def_id()) };
-                    self.handle_fn_abi_err(*err, span, FnAbiRequest::OfInstance {
-                        instance,
-                        extra_args,
-                    })
+                    self.handle_fn_abi_err(
+                        *err,
+                        span,
+                        FnAbiRequest::OfInstance { instance, extra_args },
+                    )
                 }),
         )
     }

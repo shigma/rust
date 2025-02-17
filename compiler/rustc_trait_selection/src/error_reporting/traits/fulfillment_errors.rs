@@ -585,6 +585,10 @@ impl<'a, 'tcx> TypeErrCtxt<'a, 'tcx> {
                     ty::PredicateKind::Clause(ty::ClauseKind::WellFormed(ty)) => {
                         let ty = self.resolve_vars_if_possible(ty);
                         if self.next_trait_solver() {
+                            if let Err(guar) = ty.error_reported() {
+                                return guar;
+                            }
+
                             // FIXME: we'll need a better message which takes into account
                             // which bounds actually failed to hold.
                             self.dcx().struct_span_err(
@@ -921,7 +925,7 @@ impl<'a, 'tcx> TypeErrCtxt<'a, 'tcx> {
         let hir_id = self.tcx.local_def_id_to_hir_id(obligation.cause.body_id);
         let Some(body_id) = self.tcx.hir_node(hir_id).body_id() else { return false };
         let ControlFlow::Break(expr) =
-            (FindMethodSubexprOfTry { search_span: span }).visit_body(self.tcx.hir().body(body_id))
+            (FindMethodSubexprOfTry { search_span: span }).visit_body(self.tcx.hir_body(body_id))
         else {
             return false;
         };
@@ -1008,7 +1012,7 @@ impl<'a, 'tcx> TypeErrCtxt<'a, 'tcx> {
                 && let [arg] = args
                 && let hir::ExprKind::Closure(closure) = arg.kind
                 // The closure has a block for its body with no tail expression
-                && let body = self.tcx.hir().body(closure.body)
+                && let body = self.tcx.hir_body(closure.body)
                 && let hir::ExprKind::Block(block, _) = body.value.kind
                 && let None = block.expr
                 // The last statement is of a type that can be converted to the return error type
@@ -1443,7 +1447,7 @@ impl<'a, 'tcx> TypeErrCtxt<'a, 'tcx> {
                 let [associated_item]: &[ty::AssocItem] = &associated_items[..] else {
                     return None;
                 };
-                match self.tcx.hir().get_if_local(associated_item.def_id) {
+                match self.tcx.hir_get_if_local(associated_item.def_id) {
                     Some(
                         hir::Node::TraitItem(hir::TraitItem {
                             kind: hir::TraitItemKind::Type(_, Some(ty)),
@@ -1510,7 +1514,7 @@ impl<'a, 'tcx> TypeErrCtxt<'a, 'tcx> {
                         span = match fn_decl.output {
                             hir::FnRetTy::Return(ty) => ty.span,
                             hir::FnRetTy::DefaultReturn(_) => {
-                                let body = self.tcx.hir().body(id);
+                                let body = self.tcx.hir_body(id);
                                 match body.value.kind {
                                     hir::ExprKind::Block(
                                         hir::Block { expr: Some(expr), .. },
@@ -1837,13 +1841,16 @@ impl<'a, 'tcx> TypeErrCtxt<'a, 'tcx> {
                 }
             }
             span.push_span_label(self.tcx.def_span(other_trait_def_id), "this is the found trait");
-            err.highlighted_span_note(span, vec![
-                StringPart::normal("there are ".to_string()),
-                StringPart::highlighted("multiple different versions".to_string()),
-                StringPart::normal(" of crate `".to_string()),
-                StringPart::highlighted(format!("{crate_name}")),
-                StringPart::normal("` in the dependency graph\n".to_string()),
-            ]);
+            err.highlighted_span_note(
+                span,
+                vec![
+                    StringPart::normal("there are ".to_string()),
+                    StringPart::highlighted("multiple different versions".to_string()),
+                    StringPart::normal(" of crate `".to_string()),
+                    StringPart::highlighted(format!("{crate_name}")),
+                    StringPart::normal("` in the dependency graph\n".to_string()),
+                ],
+            );
             if points_at_type {
                 // We only clarify that the same type from different crate versions are not the
                 // same when we *find* the same type coming from different crate versions, otherwise
@@ -2843,7 +2850,7 @@ impl<'a, 'tcx> TypeErrCtxt<'a, 'tcx> {
             _ => None,
         };
 
-        let found_node = found_did.and_then(|did| self.tcx.hir().get_if_local(did));
+        let found_node = found_did.and_then(|did| self.tcx.hir_get_if_local(did));
         let found_span = found_did.and_then(|did| self.tcx.hir().span_if_local(did));
 
         if !self.reported_signature_mismatch.borrow_mut().insert((span, found_span)) {
@@ -2889,7 +2896,7 @@ impl<'a, 'tcx> TypeErrCtxt<'a, 'tcx> {
         if found.len() != expected.len() {
             let (closure_span, closure_arg_span, found) = found_did
                 .and_then(|did| {
-                    let node = self.tcx.hir().get_if_local(did)?;
+                    let node = self.tcx.hir_get_if_local(did)?;
                     let (found_span, closure_arg_span, found) = self.get_fn_like_arguments(node)?;
                     Some((Some(found_span), closure_arg_span, found))
                 })
@@ -2939,7 +2946,8 @@ impl<'a, 'tcx> TypeErrCtxt<'a, 'tcx> {
             }) => (
                 fn_decl_span,
                 fn_arg_span,
-                hir.body(body)
+                self.tcx
+                    .hir_body(body)
                     .params
                     .iter()
                     .map(|arg| {
@@ -2977,12 +2985,10 @@ impl<'a, 'tcx> TypeErrCtxt<'a, 'tcx> {
                     .inputs
                     .iter()
                     .map(|arg| match arg.kind {
-                        hir::TyKind::Tup(tys) => {
-                            ArgKind::Tuple(Some(arg.span), vec![
-                                ("_".to_owned(), "_".to_owned());
-                                tys.len()
-                            ])
-                        }
+                        hir::TyKind::Tup(tys) => ArgKind::Tuple(
+                            Some(arg.span),
+                            vec![("_".to_owned(), "_".to_owned()); tys.len()],
+                        ),
                         _ => ArgKind::empty(),
                     })
                     .collect::<Vec<ArgKind>>(),
@@ -3203,7 +3209,7 @@ impl<'a, 'tcx> TypeErrCtxt<'a, 'tcx> {
                                 Some(obligation.cause.body_id)
                             };
                             if let Some(def_id) = def_id
-                                && let Some(generics) = self.tcx.hir().get_generics(def_id)
+                                && let Some(generics) = self.tcx.hir_get_generics(def_id)
                             {
                                 err.span_suggestion_verbose(
                                     generics.tail_span_for_predicate_suggestion(),

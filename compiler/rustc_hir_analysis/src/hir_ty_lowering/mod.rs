@@ -49,9 +49,9 @@ use rustc_span::{DUMMY_SP, Ident, Span, Symbol, kw};
 use rustc_trait_selection::infer::InferCtxtExt;
 use rustc_trait_selection::traits::wf::object_region_bounds;
 use rustc_trait_selection::traits::{self, ObligationCtxt};
+use rustc_type_ir::Upcast;
 use tracing::{debug, instrument};
 
-use crate::bounds::Bounds;
 use crate::check::check_abi_fn_ptr;
 use crate::errors::{AmbiguousLifetimeBound, BadReturnTypeNotation, InvalidBaseType};
 use crate::hir_ty_lowering::errors::{GenericsArgsErrExtend, prohibit_assoc_item_constraint};
@@ -691,7 +691,7 @@ impl<'tcx> dyn HirTyLowerer<'tcx> + '_ {
         constness: hir::BoundConstness,
         polarity: hir::BoundPolarity,
         self_ty: Ty<'tcx>,
-        bounds: &mut Bounds<'tcx>,
+        bounds: &mut Vec<(ty::Clause<'tcx>, Span)>,
         predicate_filter: PredicateFilter,
     ) -> GenericArgCountResult {
         let trait_def_id = trait_ref.trait_def_id().unwrap_or_else(|| FatalError.raise());
@@ -720,6 +720,8 @@ impl<'tcx> dyn HirTyLowerer<'tcx> + '_ {
             bound_vars,
         );
 
+        debug!(?poly_trait_ref);
+
         let polarity = match polarity {
             rustc_ast::BoundPolarity::Positive => ty::PredicatePolarity::Positive,
             rustc_ast::BoundPolarity::Negative(_) => ty::PredicatePolarity::Negative,
@@ -740,6 +742,26 @@ impl<'tcx> dyn HirTyLowerer<'tcx> + '_ {
                 return arg_count;
             }
         };
+
+        // We deal with const conditions later.
+        match predicate_filter {
+            PredicateFilter::All
+            | PredicateFilter::SelfOnly
+            | PredicateFilter::SelfTraitThatDefines(..)
+            | PredicateFilter::SelfAndAssociatedTypeBounds => {
+                let bound = poly_trait_ref.map_bound(|trait_ref| {
+                    ty::ClauseKind::Trait(ty::TraitPredicate { trait_ref, polarity })
+                });
+                let bound = (bound.upcast(tcx), span);
+                // FIXME(-Znext-solver): We can likely remove this hack once the new trait solver lands.
+                if tcx.is_lang_item(trait_def_id, rustc_hir::LangItem::Sized) {
+                    bounds.insert(0, bound);
+                } else {
+                    bounds.push(bound);
+                }
+            }
+            PredicateFilter::ConstIfConst | PredicateFilter::SelfConstIfConst => {}
+        }
 
         if let hir::BoundConstness::Always(span) | hir::BoundConstness::Maybe(span) = constness
             && !self.tcx().is_const_trait(trait_def_id)
@@ -765,58 +787,53 @@ impl<'tcx> dyn HirTyLowerer<'tcx> + '_ {
                 suggestion_pre,
                 suggestion,
             });
-        }
-
-        match predicate_filter {
-            // This is only concerned with trait predicates.
-            PredicateFilter::SelfTraitThatDefines(..) => {
-                bounds.push_trait_bound(tcx, poly_trait_ref, span, polarity);
-            }
-            PredicateFilter::All
-            | PredicateFilter::SelfOnly
-            | PredicateFilter::SelfAndAssociatedTypeBounds => {
-                debug!(?poly_trait_ref);
-                bounds.push_trait_bound(tcx, poly_trait_ref, span, polarity);
-
-                match constness {
-                    hir::BoundConstness::Always(span) => {
-                        if polarity == ty::PredicatePolarity::Positive {
-                            bounds.push_const_bound(
-                                tcx,
-                                poly_trait_ref,
-                                ty::BoundConstness::Const,
-                                span,
-                            );
+        } else {
+            match predicate_filter {
+                // This is only concerned with trait predicates.
+                PredicateFilter::SelfTraitThatDefines(..) => {}
+                PredicateFilter::All
+                | PredicateFilter::SelfOnly
+                | PredicateFilter::SelfAndAssociatedTypeBounds => {
+                    match constness {
+                        hir::BoundConstness::Always(span) => {
+                            if polarity == ty::PredicatePolarity::Positive {
+                                bounds.push((
+                                    poly_trait_ref
+                                        .to_host_effect_clause(tcx, ty::BoundConstness::Const),
+                                    span,
+                                ));
+                            }
                         }
+                        hir::BoundConstness::Maybe(_) => {
+                            // We don't emit a const bound here, since that would mean that we
+                            // unconditionally need to prove a `HostEffect` predicate, even when
+                            // the predicates are being instantiated in a non-const context. This
+                            // is instead handled in the `const_conditions` query.
+                        }
+                        hir::BoundConstness::Never => {}
                     }
-                    hir::BoundConstness::Maybe(_) => {
-                        // We don't emit a const bound here, since that would mean that we
-                        // unconditionally need to prove a `HostEffect` predicate, even when
-                        // the predicates are being instantiated in a non-const context. This
-                        // is instead handled in the `const_conditions` query.
+                }
+                // On the flip side, when filtering `ConstIfConst` bounds, we only need to convert
+                // `~const` bounds. All other predicates are handled in their respective queries.
+                //
+                // Note that like `PredicateFilter::SelfOnly`, we don't need to do any filtering
+                // here because we only call this on self bounds, and deal with the recursive case
+                // in `lower_assoc_item_constraint`.
+                PredicateFilter::ConstIfConst | PredicateFilter::SelfConstIfConst => {
+                    match constness {
+                        hir::BoundConstness::Maybe(span) => {
+                            if polarity == ty::PredicatePolarity::Positive {
+                                bounds.push((
+                                    poly_trait_ref
+                                        .to_host_effect_clause(tcx, ty::BoundConstness::Maybe),
+                                    span,
+                                ));
+                            }
+                        }
+                        hir::BoundConstness::Always(_) | hir::BoundConstness::Never => {}
                     }
-                    hir::BoundConstness::Never => {}
                 }
             }
-            // On the flip side, when filtering `ConstIfConst` bounds, we only need to convert
-            // `~const` bounds. All other predicates are handled in their respective queries.
-            //
-            // Note that like `PredicateFilter::SelfOnly`, we don't need to do any filtering
-            // here because we only call this on self bounds, and deal with the recursive case
-            // in `lower_assoc_item_constraint`.
-            PredicateFilter::ConstIfConst | PredicateFilter::SelfConstIfConst => match constness {
-                hir::BoundConstness::Maybe(span) => {
-                    if polarity == ty::PredicatePolarity::Positive {
-                        bounds.push_const_bound(
-                            tcx,
-                            poly_trait_ref,
-                            ty::BoundConstness::Maybe,
-                            span,
-                        );
-                    }
-                }
-                hir::BoundConstness::Always(_) | hir::BoundConstness::Never => {}
-            },
         }
 
         let mut dup_constraints = FxIndexMap::default();
@@ -1694,7 +1711,7 @@ impl<'tcx> dyn HirTyLowerer<'tcx> + '_ {
     pub fn prohibit_generic_args<'a>(
         &self,
         segments: impl Iterator<Item = &'a hir::PathSegment<'a>> + Clone,
-        err_extend: GenericsArgsErrExtend<'_>,
+        err_extend: GenericsArgsErrExtend<'a>,
     ) -> Result<(), ErrorGuaranteed> {
         let args_visitors = segments.clone().flat_map(|segment| segment.args().args);
         let mut result = Ok(());
@@ -1911,7 +1928,7 @@ impl<'tcx> dyn HirTyLowerer<'tcx> + '_ {
                     path.segments.iter().enumerate().filter_map(|(index, seg)| {
                         if !indices.contains(&index) { Some(seg) } else { None }
                     }),
-                    GenericsArgsErrExtend::DefVariant,
+                    GenericsArgsErrExtend::DefVariant(&path.segments),
                 );
 
                 let GenericPathSegment(def_id, index) = generic_segments.last().unwrap();
@@ -1976,7 +1993,7 @@ impl<'tcx> dyn HirTyLowerer<'tcx> + '_ {
                     if let Some(hir::Node::Item(&hir::Item {
                         kind: hir::ItemKind::Impl(impl_),
                         ..
-                    })) = tcx.hir().get_if_local(def_id)
+                    })) = tcx.hir_get_if_local(def_id)
                     {
                         err.span_note(impl_.self_ty.span, "not a concrete type");
                     }
@@ -2154,11 +2171,15 @@ impl<'tcx> dyn HirTyLowerer<'tcx> + '_ {
                 span_bug!(span, "use of bare `static` ConstArgKind::Path's not yet supported")
             }
             // FIXME(const_generics): create real const to allow fn items as const paths
-            Res::Def(DefKind::Fn | DefKind::AssocFn, _) => ty::Const::new_error_with_message(
-                tcx,
-                span,
-                "fn items cannot be used as const args",
-            ),
+            Res::Def(DefKind::Fn | DefKind::AssocFn, did) => {
+                self.dcx().span_delayed_bug(span, "function items cannot be used as const args");
+                let args = self.lower_generic_args_of_path_segment(
+                    span,
+                    did,
+                    path.segments.last().unwrap(),
+                );
+                ty::Const::zero_sized(tcx, Ty::new_fn_def(tcx, did, args))
+            }
 
             // Exhaustive match to be clear about what exactly we're considering to be
             // an invalid Res for a const path.
@@ -2209,7 +2230,7 @@ impl<'tcx> dyn HirTyLowerer<'tcx> + '_ {
     fn lower_anon_const(&self, anon: &AnonConst) -> Const<'tcx> {
         let tcx = self.tcx();
 
-        let expr = &tcx.hir().body(anon.body).value;
+        let expr = &tcx.hir_body(anon.body).value;
         debug!(?expr);
 
         let ty = tcx
@@ -2219,10 +2240,13 @@ impl<'tcx> dyn HirTyLowerer<'tcx> + '_ {
 
         match self.try_lower_anon_const_lit(ty, expr) {
             Some(v) => v,
-            None => ty::Const::new_unevaluated(tcx, ty::UnevaluatedConst {
-                def: anon.def_id.to_def_id(),
-                args: ty::GenericArgs::identity_for_item(tcx, anon.def_id.to_def_id()),
-            }),
+            None => ty::Const::new_unevaluated(
+                tcx,
+                ty::UnevaluatedConst {
+                    def: anon.def_id.to_def_id(),
+                    args: ty::GenericArgs::identity_for_item(tcx, anon.def_id.to_def_id()),
+                },
+            ),
         }
     }
 
@@ -2375,7 +2399,7 @@ impl<'tcx> dyn HirTyLowerer<'tcx> + '_ {
                 // Impl trait in bindings lower as an infer var with additional
                 // set of type bounds.
                 let self_ty = self.ty_infer(None, hir_ty.span);
-                let mut bounds = Bounds::default();
+                let mut bounds = Vec::new();
                 self.lower_bounds(
                     self_ty,
                     hir_bounds.iter(),
@@ -2383,11 +2407,7 @@ impl<'tcx> dyn HirTyLowerer<'tcx> + '_ {
                     ty::List::empty(),
                     PredicateFilter::All,
                 );
-                self.register_trait_ascription_bounds(
-                    bounds.clauses().collect(),
-                    hir_ty.hir_id,
-                    hir_ty.span,
-                );
+                self.register_trait_ascription_bounds(bounds, hir_ty.hir_id, hir_ty.span);
                 self_ty
             }
             // If we encounter a type relative path with RTN generics, then it must have
@@ -2554,27 +2574,29 @@ impl<'tcx> dyn HirTyLowerer<'tcx> + '_ {
         // reject function types that violate cmse ABI requirements
         cmse::validate_cmse_abi(self.tcx(), self.dcx(), hir_id, abi, bare_fn_ty);
 
-        // Find any late-bound regions declared in return type that do
-        // not appear in the arguments. These are not well-formed.
-        //
-        // Example:
-        //     for<'a> fn() -> &'a str <-- 'a is bad
-        //     for<'a> fn(&'a String) -> &'a str <-- 'a is ok
-        let inputs = bare_fn_ty.inputs();
-        let late_bound_in_args =
-            tcx.collect_constrained_late_bound_regions(inputs.map_bound(|i| i.to_owned()));
-        let output = bare_fn_ty.output();
-        let late_bound_in_ret = tcx.collect_referenced_late_bound_regions(output);
+        if !bare_fn_ty.references_error() {
+            // Find any late-bound regions declared in return type that do
+            // not appear in the arguments. These are not well-formed.
+            //
+            // Example:
+            //     for<'a> fn() -> &'a str <-- 'a is bad
+            //     for<'a> fn(&'a String) -> &'a str <-- 'a is ok
+            let inputs = bare_fn_ty.inputs();
+            let late_bound_in_args =
+                tcx.collect_constrained_late_bound_regions(inputs.map_bound(|i| i.to_owned()));
+            let output = bare_fn_ty.output();
+            let late_bound_in_ret = tcx.collect_referenced_late_bound_regions(output);
 
-        self.validate_late_bound_regions(late_bound_in_args, late_bound_in_ret, |br_name| {
-            struct_span_code_err!(
-                self.dcx(),
-                decl.output.span(),
-                E0581,
-                "return type references {}, which is not constrained by the fn input types",
-                br_name
-            )
-        });
+            self.validate_late_bound_regions(late_bound_in_args, late_bound_in_ret, |br_name| {
+                struct_span_code_err!(
+                    self.dcx(),
+                    decl.output.span(),
+                    E0581,
+                    "return type references {}, which is not constrained by the fn input types",
+                    br_name
+                )
+            });
+        }
 
         bare_fn_ty
     }

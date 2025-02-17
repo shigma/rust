@@ -304,10 +304,10 @@ impl<'infcx, 'tcx> MirBorrowckCtxt<'_, 'infcx, 'tcx> {
     /// End-user visible description of `place` if one can be found.
     /// If the place is a temporary for instance, `None` will be returned.
     pub(super) fn describe_place(&self, place_ref: PlaceRef<'tcx>) -> Option<String> {
-        self.describe_place_with_options(place_ref, DescribePlaceOpt {
-            including_downcast: false,
-            including_tuple_field: true,
-        })
+        self.describe_place_with_options(
+            place_ref,
+            DescribePlaceOpt { including_downcast: false, including_tuple_field: true },
+        )
     }
 
     /// End-user visible description of `place` if one can be found. If the place is a temporary
@@ -570,7 +570,7 @@ impl<'infcx, 'tcx> MirBorrowckCtxt<'_, 'infcx, 'tcx> {
         // If we didn't find an overloaded deref or index, then assume it's a
         // built in deref and check the type of the base.
         let base_ty = deref_base.ty(self.body, tcx).ty;
-        if base_ty.is_unsafe_ptr() {
+        if base_ty.is_raw_ptr() {
             BorrowedContentSource::DerefRawPointer
         } else if base_ty.is_mutable_ptr() {
             BorrowedContentSource::DerefMutableRef
@@ -1220,7 +1220,7 @@ impl<'infcx, 'tcx> MirBorrowckCtxt<'_, 'infcx, 'tcx> {
                             .tcx
                             .typeck_root_def_id(self.mir_def_id().to_def_id())
                             .as_local()
-                            .and_then(|def_id| self.infcx.tcx.hir().get_generics(def_id))
+                            .and_then(|def_id| self.infcx.tcx.hir_get_generics(def_id))
                         && let spans = hir_generics
                             .predicates
                             .iter()

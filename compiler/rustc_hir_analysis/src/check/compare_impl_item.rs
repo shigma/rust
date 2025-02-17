@@ -182,12 +182,15 @@ fn compare_method_predicate_entailment<'tcx>(
     // obligations.
     let impl_m_def_id = impl_m.def_id.expect_local();
     let impl_m_span = tcx.def_span(impl_m_def_id);
-    let cause =
-        ObligationCause::new(impl_m_span, impl_m_def_id, ObligationCauseCode::CompareImplItem {
+    let cause = ObligationCause::new(
+        impl_m_span,
+        impl_m_def_id,
+        ObligationCauseCode::CompareImplItem {
             impl_item_def_id: impl_m_def_id,
             trait_item_def_id: trait_m.def_id,
             kind: impl_m.kind,
-        });
+        },
+    );
 
     // Create mapping from trait method to impl method.
     let impl_def_id = impl_m.container_id(tcx);
@@ -248,12 +251,15 @@ fn compare_method_predicate_entailment<'tcx>(
         let normalize_cause = traits::ObligationCause::misc(span, impl_m_def_id);
         let predicate = ocx.normalize(&normalize_cause, param_env, predicate);
 
-        let cause =
-            ObligationCause::new(span, impl_m_def_id, ObligationCauseCode::CompareImplItem {
+        let cause = ObligationCause::new(
+            span,
+            impl_m_def_id,
+            ObligationCauseCode::CompareImplItem {
                 impl_item_def_id: impl_m_def_id,
                 trait_item_def_id: trait_m.def_id,
                 kind: impl_m.kind,
-            });
+            },
+        );
         ocx.register_obligation(traits::Obligation::new(tcx, cause, param_env, predicate));
     }
 
@@ -270,12 +276,15 @@ fn compare_method_predicate_entailment<'tcx>(
             let normalize_cause = traits::ObligationCause::misc(span, impl_m_def_id);
             let const_condition = ocx.normalize(&normalize_cause, param_env, const_condition);
 
-            let cause =
-                ObligationCause::new(span, impl_m_def_id, ObligationCauseCode::CompareImplItem {
+            let cause = ObligationCause::new(
+                span,
+                impl_m_def_id,
+                ObligationCauseCode::CompareImplItem {
                     impl_item_def_id: impl_m_def_id,
                     trait_item_def_id: trait_m.def_id,
                     kind: impl_m.kind,
-                });
+                },
+            );
             ocx.register_obligation(traits::Obligation::new(
                 tcx,
                 cause,
@@ -493,12 +502,15 @@ pub(super) fn collect_return_position_impl_trait_in_trait_tys<'tcx>(
 
     let impl_m_hir_id = tcx.local_def_id_to_hir_id(impl_m_def_id);
     let return_span = tcx.hir().fn_decl_by_hir_id(impl_m_hir_id).unwrap().output.span();
-    let cause =
-        ObligationCause::new(return_span, impl_m_def_id, ObligationCauseCode::CompareImplItem {
+    let cause = ObligationCause::new(
+        return_span,
+        impl_m_def_id,
+        ObligationCauseCode::CompareImplItem {
             impl_item_def_id: impl_m_def_id,
             trait_item_def_id: trait_m.def_id,
             kind: impl_m.kind,
-        });
+        },
+    );
 
     // Create mapping from trait to impl (i.e. impl trait header + impl method identity args).
     let trait_to_impl_args = GenericArgs::identity_for_item(tcx, impl_m.def_id).rebase_onto(
@@ -534,12 +546,15 @@ pub(super) fn collect_return_position_impl_trait_in_trait_tys<'tcx>(
         let normalize_cause = traits::ObligationCause::misc(span, impl_m_def_id);
         let predicate = ocx.normalize(&normalize_cause, param_env, predicate);
 
-        let cause =
-            ObligationCause::new(span, impl_m_def_id, ObligationCauseCode::CompareImplItem {
+        let cause = ObligationCause::new(
+            span,
+            impl_m_def_id,
+            ObligationCauseCode::CompareImplItem {
                 impl_item_def_id: impl_m_def_id,
                 trait_item_def_id: trait_m.def_id,
                 kind: impl_m.kind,
-            });
+            },
+        );
         ocx.register_obligation(traits::Obligation::new(tcx, cause, param_env, predicate));
     }
 
@@ -606,13 +621,16 @@ pub(super) fn collect_return_position_impl_trait_in_trait_tys<'tcx>(
             idx += 1;
             (
                 ty,
-                Ty::new_placeholder(tcx, ty::Placeholder {
-                    universe,
-                    bound: ty::BoundTy {
-                        var: ty::BoundVar::from_usize(idx),
-                        kind: ty::BoundTyKind::Anon,
+                Ty::new_placeholder(
+                    tcx,
+                    ty::Placeholder {
+                        universe,
+                        bound: ty::BoundTy {
+                            var: ty::BoundVar::from_usize(idx),
+                            kind: ty::BoundTyKind::Anon,
+                        },
                     },
-                }),
+                ),
             )
         })
         .collect();
@@ -640,11 +658,10 @@ pub(super) fn collect_return_position_impl_trait_in_trait_tys<'tcx>(
                 "method `{}` has an incompatible return type for trait",
                 trait_m.name
             );
-            let hir = tcx.hir();
             infcx.err_ctxt().note_type_err(
                 &mut diag,
                 &cause,
-                hir.get_if_local(impl_m.def_id)
+                tcx.hir_get_if_local(impl_m.def_id)
                     .and_then(|node| node.fn_decl())
                     .map(|decl| (decl.output.span(), Cow::from("return type in trait"), false)),
                 Some(param_env.and(infer::ValuePairs::Terms(ExpectedFound {
@@ -969,10 +986,13 @@ impl<'tcx> ty::FallibleTypeFolder<TyCtxt<'tcx>> for RemapHiddenTyRegions<'tcx> {
             return Err(guar);
         };
 
-        Ok(ty::Region::new_early_param(self.tcx, ty::EarlyParamRegion {
-            name: e.name,
-            index: (e.index as usize - self.num_trait_args + self.num_impl_args) as u32,
-        }))
+        Ok(ty::Region::new_early_param(
+            self.tcx,
+            ty::EarlyParamRegion {
+                name: e.name,
+                index: (e.index as usize - self.num_trait_args + self.num_impl_args) as u32,
+            },
+        ))
     }
 }
 
@@ -1102,15 +1122,14 @@ fn check_region_bounds_on_impl_item<'tcx>(
     // the moment, give a kind of vague error message.
     if trait_params != impl_params {
         let span = tcx
-            .hir()
-            .get_generics(impl_m.def_id.expect_local())
+            .hir_get_generics(impl_m.def_id.expect_local())
             .expect("expected impl item to have generics or else we can't compare them")
             .span;
 
         let mut generics_span = None;
         let mut bounds_span = vec![];
         let mut where_span = None;
-        if let Some(trait_node) = tcx.hir().get_if_local(trait_m.def_id)
+        if let Some(trait_node) = tcx.hir_get_if_local(trait_m.def_id)
             && let Some(trait_generics) = trait_node.generics()
         {
             generics_span = Some(trait_generics.span);
@@ -1125,7 +1144,7 @@ fn check_region_bounds_on_impl_item<'tcx>(
                     }
                 }
             }
-            if let Some(impl_node) = tcx.hir().get_if_local(impl_m.def_id)
+            if let Some(impl_node) = tcx.hir_get_if_local(impl_m.def_id)
                 && let Some(impl_generics) = impl_node.generics()
             {
                 let mut impl_bounds = 0;
@@ -1967,12 +1986,15 @@ fn compare_type_predicate_entailment<'tcx>(
         let cause = ObligationCause::misc(span, impl_ty_def_id);
         let predicate = ocx.normalize(&cause, param_env, predicate);
 
-        let cause =
-            ObligationCause::new(span, impl_ty_def_id, ObligationCauseCode::CompareImplItem {
+        let cause = ObligationCause::new(
+            span,
+            impl_ty_def_id,
+            ObligationCauseCode::CompareImplItem {
                 impl_item_def_id: impl_ty.def_id.expect_local(),
                 trait_item_def_id: trait_ty.def_id,
                 kind: impl_ty.kind,
-            });
+            },
+        );
         ocx.register_obligation(traits::Obligation::new(tcx, cause, param_env, predicate));
     }
 
@@ -1984,12 +2006,15 @@ fn compare_type_predicate_entailment<'tcx>(
             let normalize_cause = traits::ObligationCause::misc(span, impl_ty_def_id);
             let const_condition = ocx.normalize(&normalize_cause, param_env, const_condition);
 
-            let cause =
-                ObligationCause::new(span, impl_ty_def_id, ObligationCauseCode::CompareImplItem {
+            let cause = ObligationCause::new(
+                span,
+                impl_ty_def_id,
+                ObligationCauseCode::CompareImplItem {
                     impl_item_def_id: impl_ty_def_id,
                     trait_item_def_id: trait_ty.def_id,
                     kind: impl_ty.kind,
-                });
+                },
+            );
             ocx.register_obligation(traits::Obligation::new(
                 tcx,
                 cause,
@@ -2244,20 +2269,25 @@ fn param_env_with_gat_bounds<'tcx>(
                     let kind = ty::BoundTyKind::Param(param.def_id, param.name);
                     let bound_var = ty::BoundVariableKind::Ty(kind);
                     bound_vars.push(bound_var);
-                    Ty::new_bound(tcx, ty::INNERMOST, ty::BoundTy {
-                        var: ty::BoundVar::from_usize(bound_vars.len() - 1),
-                        kind,
-                    })
+                    Ty::new_bound(
+                        tcx,
+                        ty::INNERMOST,
+                        ty::BoundTy { var: ty::BoundVar::from_usize(bound_vars.len() - 1), kind },
+                    )
                     .into()
                 }
                 GenericParamDefKind::Lifetime => {
                     let kind = ty::BoundRegionKind::Named(param.def_id, param.name);
                     let bound_var = ty::BoundVariableKind::Region(kind);
                     bound_vars.push(bound_var);
-                    ty::Region::new_bound(tcx, ty::INNERMOST, ty::BoundRegion {
-                        var: ty::BoundVar::from_usize(bound_vars.len() - 1),
-                        kind,
-                    })
+                    ty::Region::new_bound(
+                        tcx,
+                        ty::INNERMOST,
+                        ty::BoundRegion {
+                            var: ty::BoundVar::from_usize(bound_vars.len() - 1),
+                            kind,
+                        },
+                    )
                     .into()
                 }
                 GenericParamDefKind::Const { .. } => {

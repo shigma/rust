@@ -67,6 +67,11 @@ impl Limit {
         Limit(value)
     }
 
+    /// Create a new unlimited limit.
+    pub fn unlimited() -> Self {
+        Limit(usize::MAX)
+    }
+
     /// Check that `value` is within the limit. Ensures that the same comparisons are used
     /// throughout the compiler, as mismatches can cause ICEs, see #72540.
     #[inline]
@@ -119,6 +124,8 @@ pub struct Limits {
     pub move_size_limit: Limit,
     /// The maximum length of types during monomorphization.
     pub type_length_limit: Limit,
+    /// The maximum pattern complexity allowed (internal only).
+    pub pattern_complexity_limit: Limit,
 }
 
 pub struct CompilerIO {
@@ -1251,7 +1258,8 @@ fn validate_commandline_args_with_session_available(sess: &Session) {
     }
 
     if let Some(dwarf_version) = sess.opts.unstable_opts.dwarf_version {
-        if dwarf_version > 5 {
+        // DWARF 1 is not supported by LLVM and DWARF 6 is not yet finalized.
+        if dwarf_version < 2 || dwarf_version > 5 {
             sess.dcx().emit_err(errors::UnsupportedDwarfVersion { dwarf_version });
         }
     }

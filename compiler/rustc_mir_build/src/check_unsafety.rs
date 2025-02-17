@@ -525,11 +525,10 @@ impl<'a, 'tcx> Visitor<'a, 'tcx> for UnsafetyVisitor<'a, 'tcx> {
                             .copied()
                             .filter(|feature| missing.contains(feature))
                             .collect();
-                        self.requires_unsafe(expr.span, CallToFunctionWith {
-                            function: func_did,
-                            missing,
-                            build_enabled,
-                        });
+                        self.requires_unsafe(
+                            expr.span,
+                            CallToFunctionWith { function: func_did, missing, build_enabled },
+                        );
                     }
                 }
             }
@@ -555,7 +554,7 @@ impl<'a, 'tcx> Visitor<'a, 'tcx> for UnsafetyVisitor<'a, 'tcx> {
                             _ => self.requires_unsafe(expr.span, UseOfExternStatic),
                         }
                     }
-                } else if self.thir[arg].ty.is_unsafe_ptr() {
+                } else if self.thir[arg].ty.is_raw_ptr() {
                     self.requires_unsafe(expr.span, DerefOfRawPointer);
                 }
             }
@@ -760,7 +759,7 @@ impl UnsafeOpKind {
         });
         let unsafe_not_inherited_note = if should_suggest {
             suggest_unsafe_block.then(|| {
-                let body_span = tcx.hir().body(parent_owner.body_id().unwrap()).value.span;
+                let body_span = tcx.hir_body(parent_owner.body_id().unwrap()).value.span;
                 UnsafeNotInheritedLintNote {
                     signature_span: tcx.def_span(parent_id.def_id),
                     body_span,
@@ -1186,9 +1185,11 @@ pub(crate) fn check_unsafety(tcx: TyCtxt<'_>, def: LocalDefId) {
     warnings.sort_by_key(|w| w.block_span);
     for UnusedUnsafeWarning { hir_id, block_span, enclosing_unsafe } in warnings {
         let block_span = tcx.sess.source_map().guess_head_span(block_span);
-        tcx.emit_node_span_lint(UNUSED_UNSAFE, hir_id, block_span, UnusedUnsafe {
-            span: block_span,
-            enclosing: enclosing_unsafe,
-        });
+        tcx.emit_node_span_lint(
+            UNUSED_UNSAFE,
+            hir_id,
+            block_span,
+            UnusedUnsafe { span: block_span, enclosing: enclosing_unsafe },
+        );
     }
 }

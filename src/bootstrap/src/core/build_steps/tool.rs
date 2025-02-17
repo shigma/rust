@@ -1,6 +1,10 @@
 use std::path::PathBuf;
 use std::{env, fs};
 
+#[cfg(feature = "tracing")]
+use tracing::instrument;
+
+use crate::core::build_steps::compile::is_lto_stage;
 use crate::core::build_steps::toolstate::ToolState;
 use crate::core::build_steps::{compile, llvm};
 use crate::core::builder;
@@ -303,6 +307,14 @@ macro_rules! bootstrap_tool {
                 });
             }
 
+            #[cfg_attr(
+                feature = "tracing",
+                instrument(
+                    level = "debug",
+                    name = $tool_name,
+                    skip_all,
+                ),
+            )]
             fn run(self, builder: &Builder<'_>) -> PathBuf {
                 $(
                     for submodule in $submodules {
@@ -362,7 +374,6 @@ bootstrap_tool!(
     GenerateWindowsSys, "src/tools/generate-windows-sys", "generate-windows-sys";
     RustdocGUITest, "src/tools/rustdoc-gui-test", "rustdoc-gui-test", is_unstable_tool = true, allow_features = "test";
     CoverageDump, "src/tools/coverage-dump", "coverage-dump";
-    RustcPerfWrapper, "src/tools/rustc-perf-wrapper", "rustc-perf-wrapper";
     WasmComponentLd, "src/tools/wasm-component-ld", "wasm-component-ld", is_unstable_tool = true, allow_features = "min_specialization";
     UnicodeTableGenerator, "src/tools/unicode-table-generator", "unicode-table-generator";
     FeaturesStatusDump, "src/tools/features-status-dump", "features-status-dump";
@@ -582,7 +593,7 @@ impl Step for Rustdoc {
             if !target_compiler.is_snapshot(builder) {
                 panic!("rustdoc in stage 0 must be snapshot rustdoc");
             }
-            return builder.initial_rustc.with_file_name(exe("rustdoc", target_compiler.host));
+            return builder.initial_rustdoc.clone();
         }
         let target = target_compiler.host;
 
@@ -660,14 +671,16 @@ impl Step for Rustdoc {
         );
 
         // rustdoc is performance sensitive, so apply LTO to it.
-        let lto = match builder.config.rust_lto {
-            RustcLto::Off => Some("off"),
-            RustcLto::Thin => Some("thin"),
-            RustcLto::Fat => Some("fat"),
-            RustcLto::ThinLocal => None,
-        };
-        if let Some(lto) = lto {
-            cargo.env(cargo_profile_var("LTO", &builder.config), lto);
+        if is_lto_stage(&build_compiler) {
+            let lto = match builder.config.rust_lto {
+                RustcLto::Off => Some("off"),
+                RustcLto::Thin => Some("thin"),
+                RustcLto::Fat => Some("fat"),
+                RustcLto::ThinLocal => None,
+            };
+            if let Some(lto) = lto {
+                cargo.env(cargo_profile_var("LTO", &builder.config), lto);
+            }
         }
 
         let _guard = builder.msg_tool(
@@ -756,6 +769,15 @@ impl Step for LldWrapper {
         run.never()
     }
 
+    #[cfg_attr(
+        feature = "tracing",
+        instrument(
+            level = "debug",
+            name = "LldWrapper::run",
+            skip_all,
+            fields(build_compiler = ?self.build_compiler, target_compiler = ?self.target_compiler),
+        ),
+    )]
     fn run(self, builder: &Builder<'_>) {
         if builder.config.dry_run() {
             return;
@@ -912,6 +934,10 @@ impl Step for LlvmBitcodeLinker {
         });
     }
 
+    #[cfg_attr(
+        feature = "tracing",
+        instrument(level = "debug", name = "LlvmBitcodeLinker::run", skip_all)
+    )]
     fn run(self, builder: &Builder<'_>) -> PathBuf {
         let bin_name = "llvm-bitcode-linker";
 
