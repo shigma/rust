@@ -49,8 +49,7 @@ impl<'tcx> crate::MirPass<'tcx> for Inline {
         match sess.mir_opt_level() {
             0 | 1 => false,
             2 => {
-                (sess.opts.optimize == OptLevel::Default
-                    || sess.opts.optimize == OptLevel::Aggressive)
+                (sess.opts.optimize == OptLevel::More || sess.opts.optimize == OptLevel::Aggressive)
                     && sess.opts.incremental == None
             }
             _ => true,
@@ -464,7 +463,7 @@ fn inline<'tcx, T: Inliner<'tcx>>(tcx: TyCtxt<'tcx>, body: &mut Body<'tcx>) -> b
     let def_id = body.source.def_id();
 
     // Only do inlining into fn bodies.
-    if !tcx.hir().body_owner_kind(def_id).is_fn_or_closure() {
+    if !tcx.hir_body_owner_kind(def_id).is_fn_or_closure() {
         return false;
     }
 
@@ -1111,10 +1110,13 @@ fn new_call_temp<'tcx>(
     });
 
     if let Some(block) = return_block {
-        caller_body[block].statements.insert(0, Statement {
-            source_info: callsite.source_info,
-            kind: StatementKind::StorageDead(local),
-        });
+        caller_body[block].statements.insert(
+            0,
+            Statement {
+                source_info: callsite.source_info,
+                kind: StatementKind::StorageDead(local),
+            },
+        );
     }
 
     local
@@ -1254,6 +1256,8 @@ impl<'tcx> MutVisitor<'tcx> for Integrator<'_, 'tcx> {
         // replaced down below anyways).
         if !matches!(terminator.kind, TerminatorKind::Return) {
             self.super_terminator(terminator, loc);
+        } else {
+            self.visit_source_info(&mut terminator.source_info);
         }
 
         match terminator.kind {

@@ -4,10 +4,10 @@
 
 use std::borrow::Cow;
 use std::fmt::{self, Debug, Formatter};
+use std::iter;
 use std::ops::{Index, IndexMut};
-use std::{iter, mem};
 
-pub use basic_blocks::BasicBlocks;
+pub use basic_blocks::{BasicBlocks, SwitchTargetValue};
 use either::Either;
 use polonius_engine::Atom;
 use rustc_abi::{FieldIdx, VariantIdx};
@@ -30,9 +30,7 @@ use rustc_span::{DUMMY_SP, Span, Symbol};
 use tracing::{debug, trace};
 
 pub use self::query::*;
-use self::visit::TyContext;
 use crate::mir::interpret::{AllocRange, Scalar};
-use crate::mir::visit::MirVisitable;
 use crate::ty::codec::{TyDecoder, TyEncoder};
 use crate::ty::print::{FmtPrinter, Printer, pretty_print_const, with_no_trimmed_paths};
 use crate::ty::visit::TypeVisitableExt;
@@ -49,12 +47,10 @@ pub mod generic_graphviz;
 pub mod graphviz;
 pub mod interpret;
 pub mod mono;
-pub mod patch;
 pub mod pretty;
 mod query;
 mod statement;
 mod syntax;
-pub mod tcx;
 mod terminator;
 
 pub mod traversal;
@@ -101,24 +97,17 @@ impl<'tcx> HasLocalDecls<'tcx> for Body<'tcx> {
 }
 
 impl MirPhase {
-    /// Gets the index of the current MirPhase within the set of all `MirPhase`s.
-    ///
-    /// FIXME(JakobDegen): Return a `(usize, usize)` instead.
-    pub fn phase_index(&self) -> usize {
-        const BUILT_PHASE_COUNT: usize = 1;
-        const ANALYSIS_PHASE_COUNT: usize = 2;
-        match self {
-            MirPhase::Built => 1,
-            MirPhase::Analysis(analysis_phase) => {
-                1 + BUILT_PHASE_COUNT + (*analysis_phase as usize)
-            }
-            MirPhase::Runtime(runtime_phase) => {
-                1 + BUILT_PHASE_COUNT + ANALYSIS_PHASE_COUNT + (*runtime_phase as usize)
-            }
+    /// Gets the (dialect, phase) index of the current `MirPhase`. Both numbers
+    /// are 1-indexed.
+    pub fn index(&self) -> (usize, usize) {
+        match *self {
+            MirPhase::Built => (1, 1),
+            MirPhase::Analysis(analysis_phase) => (2, 1 + analysis_phase as usize),
+            MirPhase::Runtime(runtime_phase) => (3, 1 + runtime_phase as usize),
         }
     }
 
-    /// Parses an `MirPhase` from a pair of strings. Panics if this isn't possible for any reason.
+    /// Parses a `MirPhase` from a pair of strings. Panics if this isn't possible for any reason.
     pub fn parse(dialect: String, phase: Option<String>) -> Self {
         match &*dialect.to_ascii_lowercase() {
             "built" => {
@@ -542,17 +531,6 @@ impl<'tcx> Body<'tcx> {
         }
     }
 
-    pub fn span_for_ty_context(&self, ty_context: TyContext) -> Span {
-        match ty_context {
-            TyContext::UserTy(span) => span,
-            TyContext::ReturnTy(source_info)
-            | TyContext::LocalDecl { source_info, .. }
-            | TyContext::YieldTy(source_info)
-            | TyContext::ResumeTy(source_info) => source_info.span,
-            TyContext::Location(loc) => self.source_info(loc).span,
-        }
-    }
-
     /// Returns the return type; it always return first element from `local_decls` array.
     #[inline]
     pub fn return_ty(&self) -> Ty<'tcx> {
@@ -794,7 +772,7 @@ impl<T> ClearCrossCrate<T> {
         }
     }
 
-    pub fn assert_crate_local(self) -> T {
+    pub fn unwrap_crate_local(self) -> T {
         match self {
             ClearCrossCrate::Clear => bug!("unwrapping cross-crate data"),
             ClearCrossCrate::Set(v) => v,
@@ -951,7 +929,7 @@ mod binding_form_impl {
 /// involved in borrow_check errors, e.g., explanations of where the
 /// temporaries come from, when their destructors are run, and/or how
 /// one might revise the code to satisfy the borrow checker's rules.
-#[derive(Clone, Debug, TyEncodable, TyDecodable, HashStable)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, TyEncodable, TyDecodable, HashStable)]
 pub struct BlockTailInfo {
     /// If `true`, then the value resulting from evaluating this tail
     /// expression is ignored by the block's expression context.
@@ -975,7 +953,6 @@ pub struct LocalDecl<'tcx> {
     /// Temporaries and the return place are always mutable.
     pub mutability: Mutability,
 
-    // FIXME(matthewjasper) Don't store in this in `Body`
     pub local_info: ClearCrossCrate<Box<LocalInfo<'tcx>>>,
 
     /// The type of this local.
@@ -985,7 +962,6 @@ pub struct LocalDecl<'tcx> {
     /// e.g., via `let x: T`, then we carry that type here. The MIR
     /// borrow checker needs this information since it can affect
     /// region inference.
-    // FIXME(matthewjasper) Don't store in this in `Body`
     pub user_ty: Option<Box<UserTypeProjections>>,
 
     /// The *syntactic* (i.e., not visibility) source scope the local is defined
@@ -1093,7 +1069,6 @@ pub enum LocalInfo<'tcx> {
     AggregateTemp,
     /// A temporary created for evaluation of some subexpression of some block's tail expression
     /// (with no intervening statement context).
-    // FIXME(matthewjasper) Don't store in this in `Body`
     BlockTailTemp(BlockTailInfo),
     /// A temporary created during evaluating `if` predicate, possibly for pattern matching for `let`s,
     /// and subject to Edition 2024 temporary lifetime rules
@@ -1108,7 +1083,7 @@ pub enum LocalInfo<'tcx> {
 
 impl<'tcx> LocalDecl<'tcx> {
     pub fn local_info(&self) -> &LocalInfo<'tcx> {
-        self.local_info.as_ref().assert_crate_local()
+        self.local_info.as_ref().unwrap_crate_local()
     }
 
     /// Returns `true` only if local is a binding that can itself be
@@ -1366,70 +1341,6 @@ impl<'tcx> BasicBlockData<'tcx> {
         self.terminator.as_mut().expect("invalid terminator state")
     }
 
-    pub fn retain_statements<F>(&mut self, mut f: F)
-    where
-        F: FnMut(&mut Statement<'_>) -> bool,
-    {
-        for s in &mut self.statements {
-            if !f(s) {
-                s.make_nop();
-            }
-        }
-    }
-
-    pub fn expand_statements<F, I>(&mut self, mut f: F)
-    where
-        F: FnMut(&mut Statement<'tcx>) -> Option<I>,
-        I: iter::TrustedLen<Item = Statement<'tcx>>,
-    {
-        // Gather all the iterators we'll need to splice in, and their positions.
-        let mut splices: Vec<(usize, I)> = vec![];
-        let mut extra_stmts = 0;
-        for (i, s) in self.statements.iter_mut().enumerate() {
-            if let Some(mut new_stmts) = f(s) {
-                if let Some(first) = new_stmts.next() {
-                    // We can already store the first new statement.
-                    *s = first;
-
-                    // Save the other statements for optimized splicing.
-                    let remaining = new_stmts.size_hint().0;
-                    if remaining > 0 {
-                        splices.push((i + 1 + extra_stmts, new_stmts));
-                        extra_stmts += remaining;
-                    }
-                } else {
-                    s.make_nop();
-                }
-            }
-        }
-
-        // Splice in the new statements, from the end of the block.
-        // FIXME(eddyb) This could be more efficient with a "gap buffer"
-        // where a range of elements ("gap") is left uninitialized, with
-        // splicing adding new elements to the end of that gap and moving
-        // existing elements from before the gap to the end of the gap.
-        // For now, this is safe code, emulating a gap but initializing it.
-        let mut gap = self.statements.len()..self.statements.len() + extra_stmts;
-        self.statements.resize(gap.end, Statement {
-            source_info: SourceInfo::outermost(DUMMY_SP),
-            kind: StatementKind::Nop,
-        });
-        for (splice_start, new_stmts) in splices.into_iter().rev() {
-            let splice_end = splice_start + new_stmts.size_hint().0;
-            while gap.end > splice_end {
-                gap.start -= 1;
-                gap.end -= 1;
-                self.statements.swap(gap.start, gap.end);
-            }
-            self.statements.splice(splice_start..splice_end, new_stmts);
-            gap.end = splice_start;
-        }
-    }
-
-    pub fn visitable(&self, index: usize) -> &dyn MirVisitable<'tcx> {
-        if index < self.statements.len() { &self.statements[index] } else { &self.terminator }
-    }
-
     /// Does the block have no statements and an unreachable terminator?
     #[inline]
     pub fn is_empty_unreachable(&self) -> bool {
@@ -1561,7 +1472,7 @@ pub struct SourceScopeLocalData {
 /// &'static str`.
 #[derive(Clone, Debug, TyEncodable, TyDecodable, HashStable, TypeFoldable, TypeVisitable)]
 pub struct UserTypeProjections {
-    pub contents: Vec<(UserTypeProjection, Span)>,
+    pub contents: Vec<UserTypeProjection>,
 }
 
 impl<'tcx> UserTypeProjections {
@@ -1573,26 +1484,17 @@ impl<'tcx> UserTypeProjections {
         self.contents.is_empty()
     }
 
-    pub fn projections_and_spans(
-        &self,
-    ) -> impl Iterator<Item = &(UserTypeProjection, Span)> + ExactSizeIterator {
+    pub fn projections(&self) -> impl Iterator<Item = &UserTypeProjection> + ExactSizeIterator {
         self.contents.iter()
     }
 
-    pub fn projections(&self) -> impl Iterator<Item = &UserTypeProjection> + ExactSizeIterator {
-        self.contents.iter().map(|&(ref user_type, _span)| user_type)
-    }
-
-    pub fn push_projection(mut self, user_ty: &UserTypeProjection, span: Span) -> Self {
-        self.contents.push((user_ty.clone(), span));
+    pub fn push_user_type(mut self, base_user_type: UserTypeAnnotationIndex) -> Self {
+        self.contents.push(UserTypeProjection { base: base_user_type, projs: vec![] });
         self
     }
 
-    fn map_projections(
-        mut self,
-        mut f: impl FnMut(UserTypeProjection) -> UserTypeProjection,
-    ) -> Self {
-        self.contents = self.contents.into_iter().map(|(proj, span)| (f(proj), span)).collect();
+    fn map_projections(mut self, f: impl FnMut(UserTypeProjection) -> UserTypeProjection) -> Self {
+        self.contents = self.contents.into_iter().map(f).collect();
         self
     }
 

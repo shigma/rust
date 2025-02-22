@@ -1954,10 +1954,10 @@ impl<'a> Parser<'a> {
                 // Try to recover extra trailing angle brackets
                 if let TyKind::Path(_, Path { segments, .. }) = &a_var.ty.kind {
                     if let Some(last_segment) = segments.last() {
-                        let guar = self.check_trailing_angle_brackets(last_segment, &[
-                            exp!(Comma),
-                            exp!(CloseBrace),
-                        ]);
+                        let guar = self.check_trailing_angle_brackets(
+                            last_segment,
+                            &[exp!(Comma), exp!(CloseBrace)],
+                        );
                         if let Some(_guar) = guar {
                             // Handle a case like `Vec<u8>>,` where we can continue parsing fields
                             // after the comma
@@ -2043,9 +2043,6 @@ impl<'a> Parser<'a> {
         }
         self.expect_field_ty_separator()?;
         let ty = self.parse_ty()?;
-        if self.token == token::Colon && self.look_ahead(1, |t| *t != token::Colon) {
-            self.dcx().emit_err(errors::SingleColonStructType { span: self.token.span });
-        }
         let default = if self.token == token::Eq {
             self.bump();
             let const_expr = self.parse_expr_anon_const()?;

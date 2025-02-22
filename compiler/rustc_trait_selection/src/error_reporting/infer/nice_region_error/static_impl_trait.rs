@@ -146,8 +146,8 @@ impl<'a, 'tcx> NiceRegionError<'a, 'tcx> {
             if let ObligationCauseCode::ReturnValue(hir_id)
             | ObligationCauseCode::BlockTailExpression(hir_id, ..) = cause.code()
             {
-                let parent_id = tcx.hir().get_parent_item(*hir_id);
-                if let Some(fn_decl) = tcx.hir().fn_decl_by_hir_id(parent_id.into()) {
+                let parent_id = tcx.hir_get_parent_item(*hir_id);
+                if let Some(fn_decl) = tcx.hir_fn_decl_by_hir_id(parent_id.into()) {
                     let mut span: MultiSpan = fn_decl.output.span().into();
                     let mut spans = Vec::new();
                     let mut add_label = true;
@@ -318,14 +318,17 @@ pub fn suggest_new_region_bound(
                 } else {
                     // get a lifetime name of existing named lifetimes if any
                     let existing_lt_name = if let Some(id) = scope_def_id
-                        && let Some(generics) = tcx.hir().get_generics(id)
+                        && let Some(generics) = tcx.hir_get_generics(id)
                         && let named_lifetimes = generics
                             .params
                             .iter()
                             .filter(|p| {
-                                matches!(p.kind, GenericParamKind::Lifetime {
-                                    kind: hir::LifetimeParamKind::Explicit
-                                })
+                                matches!(
+                                    p.kind,
+                                    GenericParamKind::Lifetime {
+                                        kind: hir::LifetimeParamKind::Explicit
+                                    }
+                                )
                             })
                             .map(|p| {
                                 if let hir::ParamName::Plain(name) = p.name {
@@ -346,7 +349,7 @@ pub fn suggest_new_region_bound(
                     // if there are more than one elided lifetimes in inputs, the explicit `'_` lifetime cannot be used.
                     // introducing a new lifetime `'a` or making use of one from existing named lifetimes if any
                     if let Some(id) = scope_def_id
-                        && let Some(generics) = tcx.hir().get_generics(id)
+                        && let Some(generics) = tcx.hir_get_generics(id)
                         && let mut spans_suggs =
                             make_elided_region_spans_suggs(name, generics.params.iter())
                         && spans_suggs.len() > 1
@@ -467,9 +470,9 @@ impl<'a, 'tcx> NiceRegionError<'a, 'tcx> {
         def_id: DefId,
         trait_objects: &FxIndexSet<DefId>,
     ) -> Option<(Ident, &'tcx hir::Ty<'tcx>)> {
-        match tcx.hir().get_if_local(def_id)? {
+        match tcx.hir_get_if_local(def_id)? {
             Node::ImplItem(impl_item) => {
-                let impl_did = tcx.hir().get_parent_item(impl_item.hir_id());
+                let impl_did = tcx.hir_get_parent_item(impl_item.hir_id());
                 if let hir::OwnerNode::Item(Item {
                     kind: ItemKind::Impl(hir::Impl { self_ty, .. }),
                     ..
@@ -481,13 +484,13 @@ impl<'a, 'tcx> NiceRegionError<'a, 'tcx> {
                 }
             }
             Node::TraitItem(trait_item) => {
-                let trait_id = tcx.hir().get_parent_item(trait_item.hir_id());
+                let trait_id = tcx.hir_get_parent_item(trait_item.hir_id());
                 debug_assert_eq!(tcx.def_kind(trait_id.def_id), hir::def::DefKind::Trait);
                 // The method being called is defined in the `trait`, but the `'static`
                 // obligation comes from the `impl`. Find that `impl` so that we can point
                 // at it in the suggestion.
                 let trait_did = trait_id.to_def_id();
-                tcx.hir().trait_impls(trait_did).iter().find_map(|&impl_did| {
+                tcx.hir_trait_impls(trait_did).iter().find_map(|&impl_did| {
                     if let Node::Item(Item {
                         kind: ItemKind::Impl(hir::Impl { self_ty, .. }), ..
                     }) = tcx.hir_node_by_def_id(impl_did)

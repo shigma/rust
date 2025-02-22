@@ -19,7 +19,7 @@ use rustc_middle::ty::{self, Binder, ClauseKind, ExistentialPredicate, List, Pre
 use rustc_session::declare_lint_pass;
 use rustc_span::symbol::Symbol;
 use rustc_span::{Span, sym};
-use rustc_target::spec::abi::Abi;
+use rustc_abi::ExternAbi;
 use rustc_trait_selection::infer::InferCtxtExt as _;
 use rustc_trait_selection::traits::query::evaluate_obligation::InferCtxtExt as _;
 use std::{fmt, iter};
@@ -160,7 +160,7 @@ impl<'tcx> LateLintPass<'tcx> for Ptr {
 
             check_mut_from_ref(cx, sig, None);
 
-            if !matches!(sig.header.abi, Abi::Rust) {
+            if !matches!(sig.header.abi, ExternAbi::Rust) {
                 // Ignore `extern` functions with non-Rust calling conventions
                 return;
             }
@@ -186,8 +186,7 @@ impl<'tcx> LateLintPass<'tcx> for Ptr {
     }
 
     fn check_body(&mut self, cx: &LateContext<'tcx>, body: &Body<'tcx>) {
-        let hir = cx.tcx.hir();
-        let mut parents = hir.parent_iter(body.value.hir_id);
+        let mut parents = cx.tcx.hir_parent_iter(body.value.hir_id);
         let (item_id, sig, is_trait_item) = match parents.next() {
             Some((_, Node::Item(i))) => {
                 if let ItemKind::Fn { sig, .. } = &i.kind {
@@ -220,7 +219,7 @@ impl<'tcx> LateLintPass<'tcx> for Ptr {
 
         check_mut_from_ref(cx, sig, Some(body));
 
-        if !matches!(sig.header.abi, Abi::Rust) {
+        if !matches!(sig.header.abi, ExternAbi::Rust) {
             // Ignore `extern` functions with non-Rust calling conventions
             return;
         }
@@ -583,8 +582,8 @@ fn check_ptr_arg_usage<'tcx>(cx: &LateContext<'tcx>, body: &Body<'tcx>, args: &[
     }
     impl<'tcx> Visitor<'tcx> for V<'_, 'tcx> {
         type NestedFilter = nested_filter::OnlyBodies;
-        fn nested_visit_map(&mut self) -> Self::Map {
-            self.cx.tcx.hir()
+        fn maybe_tcx(&mut self) -> Self::MaybeTyCtxt {
+            self.cx.tcx
         }
 
         fn visit_anon_const(&mut self, _: &'tcx AnonConst) {}

@@ -7,13 +7,12 @@ use std::fmt::{self, Debug};
 
 use rustc_abi::TyAndLayout;
 use rustc_ast::InlineAsmTemplatePiece;
-use rustc_ast_ir::try_visit;
-use rustc_ast_ir::visit::VisitorResult;
 use rustc_hir::def::Namespace;
 use rustc_hir::def_id::LocalDefId;
 use rustc_span::Span;
 use rustc_span::source_map::Spanned;
 use rustc_type_ir::ConstKind;
+use rustc_type_ir::visit::{VisitorResult, try_visit};
 
 use super::print::PrettyPrinter;
 use super::{GenericArg, GenericArgKind, Pattern, Region};
@@ -165,13 +164,9 @@ impl<'tcx> fmt::Debug for ty::consts::Expr<'tcx> {
 impl<'tcx> fmt::Debug for ty::Const<'tcx> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         // If this is a value, we spend some effort to make it look nice.
-        if let ConstKind::Value(_) = self.kind() {
+        if let ConstKind::Value(cv) = self.kind() {
             return ty::tls::with(move |tcx| {
-                // ValTrees aren't interned, so we lift the entire constant.
-                let lifted = tcx.lift(*self).unwrap();
-                let ConstKind::Value(cv) = lifted.kind() else {
-                    bug!("we checked that this is a valtree")
-                };
+                let cv = tcx.lift(cv).unwrap();
                 let mut cx = FmtPrinter::new(tcx, Namespace::ValueNS);
                 cx.pretty_print_const_valtree(cv, /*print_ty*/ true)?;
                 f.write_str(&cx.into_buffer())

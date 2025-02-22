@@ -5,6 +5,7 @@ use clippy_utils::diagnostics::span_lint_and_then;
 use clippy_utils::is_in_const_context;
 use clippy_utils::macros::macro_backtrace;
 use clippy_utils::ty::{InteriorMut, implements_trait};
+use rustc_abi::VariantIdx;
 use rustc_hir::def::{DefKind, Res};
 use rustc_hir::def_id::DefId;
 use rustc_hir::{
@@ -16,7 +17,6 @@ use rustc_middle::ty::adjustment::Adjust;
 use rustc_middle::ty::{self, Ty, TyCtxt};
 use rustc_session::impl_lint_pass;
 use rustc_span::{DUMMY_SP, Span, sym};
-use rustc_target::abi::VariantIdx;
 
 // FIXME: this is a correctness problem but there's no suitable
 // warn-by-default category.
@@ -179,8 +179,8 @@ impl<'tcx> NonCopyConst<'tcx> {
     }
 
     fn is_value_unfrozen_raw_inner(cx: &LateContext<'tcx>, val: ty::ValTree<'tcx>, ty: Ty<'tcx>) -> bool {
-        // No branch that we check (yet) should continue if val isn't a ValTree::Branch
-        let ty::ValTree::Branch(val) = val else { return false };
+        // No branch that we check (yet) should continue if val isn't a branch
+        let Some(val) = val.try_to_branch() else { return false };
         match *ty.kind() {
             // the fact that we have to dig into every structs to search enums
             // leads us to the point checking `UnsafeCell` directly is the only option.
@@ -192,9 +192,10 @@ impl<'tcx> NonCopyConst<'tcx> {
                 .iter()
                 .any(|field| Self::is_value_unfrozen_raw_inner(cx, *field, ty)),
             ty::Adt(def, args) if def.is_enum() => {
-                let Some((&ty::ValTree::Leaf(variant_index), fields)) = val.split_first() else {
+                let Some((&variant_valtree, fields)) = val.split_first() else {
                     return false;
                 };
+                let variant_index = variant_valtree.unwrap_leaf();
                 let variant_index = VariantIdx::from_u32(variant_index.to_u32());
                 fields
                     .iter()
@@ -343,7 +344,7 @@ impl<'tcx> LateLintPass<'tcx> for NonCopyConst<'tcx> {
 
     fn check_impl_item(&mut self, cx: &LateContext<'tcx>, impl_item: &'tcx ImplItem<'_>) {
         if let ImplItemKind::Const(_, body_id) = &impl_item.kind {
-            let item_def_id = cx.tcx.hir().get_parent_item(impl_item.hir_id()).def_id;
+            let item_def_id = cx.tcx.hir_get_parent_item(impl_item.hir_id()).def_id;
             let item = cx.tcx.hir().expect_item(item_def_id);
 
             match &item.kind {

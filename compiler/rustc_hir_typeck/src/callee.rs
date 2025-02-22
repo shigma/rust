@@ -153,13 +153,16 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                     closure_sig,
                 );
                 let adjustments = self.adjust_steps(autoderef);
-                self.record_deferred_call_resolution(def_id, DeferredCallResolution {
-                    call_expr,
-                    callee_expr,
-                    closure_ty: adjusted_ty,
-                    adjustments,
-                    fn_sig: closure_sig,
-                });
+                self.record_deferred_call_resolution(
+                    def_id,
+                    DeferredCallResolution {
+                        call_expr,
+                        callee_expr,
+                        closure_ty: adjusted_ty,
+                        adjustments,
+                        fn_sig: closure_sig,
+                    },
+                );
                 return Some(CallStep::DeferredClosure(def_id, closure_sig));
             }
 
@@ -196,13 +199,16 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                     coroutine_closure_sig.abi,
                 );
                 let adjustments = self.adjust_steps(autoderef);
-                self.record_deferred_call_resolution(def_id, DeferredCallResolution {
-                    call_expr,
-                    callee_expr,
-                    closure_ty: adjusted_ty,
-                    adjustments,
-                    fn_sig: call_sig,
-                });
+                self.record_deferred_call_resolution(
+                    def_id,
+                    DeferredCallResolution {
+                        call_expr,
+                        callee_expr,
+                        closure_ty: adjusted_ty,
+                        adjustments,
+                        fn_sig: call_sig,
+                    },
+                );
                 return Some(CallStep::DeferredClosure(def_id, call_sig));
             }
 
@@ -340,7 +346,6 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             return;
         };
 
-        let hir = self.tcx.hir();
         let fn_decl_span = if let hir::Node::Expr(hir::Expr {
             kind: hir::ExprKind::Closure(&hir::Closure { fn_decl_span, .. }),
             ..
@@ -362,7 +367,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                     }),
                 ..
             }),
-        )) = hir.parent_iter(hir_id).nth(3)
+        )) = self.tcx.hir_parent_iter(hir_id).nth(3)
         {
             // Actually need to unwrap one more layer of HIR to get to
             // the _real_ closure...
@@ -702,8 +707,8 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             && let Res::Local(_) = path.res
             && let [segment] = &path.segments
         {
-            for id in self.tcx.hir().items() {
-                if let Some(node) = self.tcx.hir().get_if_local(id.owner_id.into())
+            for id in self.tcx.hir_free_items() {
+                if let Some(node) = self.tcx.hir_get_if_local(id.owner_id.into())
                     && let hir::Node::Item(item) = node
                     && let hir::ItemKind::Fn { .. } = item.kind
                     && item.ident.name == segment.ident.name
@@ -854,7 +859,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             return;
         }
 
-        let host = match self.tcx.hir().body_const_context(self.body_id) {
+        let host = match self.tcx.hir_body_const_context(self.body_id) {
             Some(hir::ConstContext::Const { .. } | hir::ConstContext::Static(_)) => {
                 ty::BoundConstness::Const
             }

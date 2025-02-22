@@ -325,6 +325,9 @@ pub struct Config {
     pub hosts: Vec<TargetSelection>,
     pub targets: Vec<TargetSelection>,
     pub local_rebuild: bool,
+    #[cfg(not(test))]
+    jemalloc: bool,
+    #[cfg(test)]
     pub jemalloc: bool,
     pub control_flow_guard: bool,
     pub ehcont_guard: bool,
@@ -643,6 +646,7 @@ pub struct Target {
     pub no_std: bool,
     pub codegen_backends: Option<Vec<String>>,
     pub optimized_compiler_builtins: Option<bool>,
+    pub jemalloc: Option<bool>,
 }
 
 impl Target {
@@ -935,6 +939,7 @@ define_config! {
         optimized_compiler_builtins: Option<bool> = "optimized-compiler-builtins",
         jobs: Option<u32> = "jobs",
         compiletest_diff_tool: Option<String> = "compiletest-diff-tool",
+        ccache: Option<StringOrBool> = "ccache",
     }
 }
 
@@ -961,6 +966,7 @@ define_config! {
         tests: Option<bool> = "tests",
         enzyme: Option<bool> = "enzyme",
         plugins: Option<bool> = "plugins",
+        // FIXME: Remove this field at Q2 2025, it has been replaced by build.ccache
         ccache: Option<StringOrBool> = "ccache",
         static_libstdcpp: Option<bool> = "static-libstdcpp",
         libzstd: Option<bool> = "libzstd",
@@ -1232,6 +1238,7 @@ define_config! {
         codegen_backends: Option<Vec<String>> = "codegen-backends",
         runner: Option<String> = "runner",
         optimized_compiler_builtins: Option<bool> = "optimized-compiler-builtins",
+        jemalloc: Option<bool> = "jemalloc",
     }
 }
 
@@ -1622,6 +1629,7 @@ impl Config {
             optimized_compiler_builtins,
             jobs,
             compiletest_diff_tool,
+            mut ccache,
         } = toml.build.unwrap_or_default();
 
         config.jobs = Some(threads_from_config(flags.jobs.unwrap_or(jobs.unwrap_or(0))));
@@ -1928,11 +1936,14 @@ impl Config {
             config.rustc_default_linker = default_linker;
             config.musl_root = musl_root.map(PathBuf::from);
             config.save_toolstates = save_toolstates.map(PathBuf::from);
-            set(&mut config.deny_warnings, match flags.warnings {
-                Warnings::Deny => Some(true),
-                Warnings::Warn => Some(false),
-                Warnings::Default => deny_warnings,
-            });
+            set(
+                &mut config.deny_warnings,
+                match flags.warnings {
+                    Warnings::Deny => Some(true),
+                    Warnings::Warn => Some(false),
+                    Warnings::Default => deny_warnings,
+                },
+            );
             set(&mut config.backtrace_on_ice, backtrace_on_ice);
             set(&mut config.rust_verify_llvm_ir, verify_llvm_ir);
             config.rust_thin_lto_import_instr_limit = thin_lto_import_instr_limit;
@@ -2003,7 +2014,7 @@ impl Config {
                 tests,
                 enzyme,
                 plugins,
-                ccache,
+                ccache: llvm_ccache,
                 static_libstdcpp,
                 libzstd,
                 ninja,
@@ -2026,13 +2037,11 @@ impl Config {
                 download_ci_llvm,
                 build_config,
             } = llvm;
-            match ccache {
-                Some(StringOrBool::String(ref s)) => config.ccache = Some(s.to_string()),
-                Some(StringOrBool::Bool(true)) => {
-                    config.ccache = Some("ccache".to_string());
-                }
-                Some(StringOrBool::Bool(false)) | None => {}
+            if llvm_ccache.is_some() {
+                eprintln!("Warning: llvm.ccache is deprecated. Use build.ccache instead.");
             }
+
+            ccache = ccache.or(llvm_ccache);
             set(&mut config.ninja_in_file, ninja);
             llvm_tests = tests;
             llvm_enzyme = enzyme;
@@ -2157,6 +2166,7 @@ impl Config {
                 target.profiler = cfg.profiler;
                 target.rpath = cfg.rpath;
                 target.optimized_compiler_builtins = cfg.optimized_compiler_builtins;
+                target.jemalloc = cfg.jemalloc;
 
                 if let Some(ref backends) = cfg.codegen_backends {
                     let available_backends = ["llvm", "cranelift", "gcc"];
@@ -2184,6 +2194,14 @@ impl Config {
 
                 config.target_config.insert(TargetSelection::from_user(&triple), target);
             }
+        }
+
+        match ccache {
+            Some(StringOrBool::String(ref s)) => config.ccache = Some(s.to_string()),
+            Some(StringOrBool::Bool(true)) => {
+                config.ccache = Some("ccache".to_string());
+            }
+            Some(StringOrBool::Bool(false)) | None => {}
         }
 
         if config.llvm_from_ci {
@@ -2714,6 +2732,10 @@ impl Config {
             .unwrap_or(&self.rust_codegen_backends)
     }
 
+    pub fn jemalloc(&self, target: TargetSelection) -> bool {
+        self.target_config.get(&target).and_then(|cfg| cfg.jemalloc).unwrap_or(self.jemalloc)
+    }
+
     pub fn default_codegen_backend(&self, target: TargetSelection) -> Option<String> {
         self.codegen_backends(target).first().cloned()
     }
@@ -2735,8 +2757,17 @@ impl Config {
     /// tarball). Typically [`crate::Build::require_submodule`] should be
     /// used instead to provide a nice error to the user if the submodule is
     /// missing.
+    #[cfg_attr(
+        feature = "tracing",
+        instrument(
+            level = "trace",
+            name = "Config::update_submodule",
+            skip_all,
+            fields(relative_path = ?relative_path),
+        ),
+    )]
     pub(crate) fn update_submodule(&self, relative_path: &str) {
-        if !self.submodules() {
+        if self.rust_info.is_from_tarball() || !self.submodules() {
             return;
         }
 

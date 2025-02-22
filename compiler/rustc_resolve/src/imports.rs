@@ -182,6 +182,19 @@ pub(crate) struct ImportData<'ra> {
 /// so we can use referential equality to compare them.
 pub(crate) type Import<'ra> = Interned<'ra, ImportData<'ra>>;
 
+// Allows us to use Interned without actually enforcing (via Hash/PartialEq/...) uniqueness of the
+// contained data.
+// FIXME: We may wish to actually have at least debug-level assertions that Interned's guarantees
+// are upheld.
+impl std::hash::Hash for ImportData<'_> {
+    fn hash<H>(&self, _: &mut H)
+    where
+        H: std::hash::Hasher,
+    {
+        unreachable!()
+    }
+}
+
 impl<'ra> ImportData<'ra> {
     pub(crate) fn is_glob(&self) -> bool {
         matches!(self.kind, ImportKind::Glob { .. })
@@ -914,12 +927,15 @@ impl<'ra, 'tcx> Resolver<'ra, 'tcx> {
             } => {
                 if no_ambiguity {
                     assert!(import.imported_module.get().is_none());
-                    self.report_error(span, ResolutionError::FailedToResolve {
-                        segment: Some(segment_name),
-                        label,
-                        suggestion,
-                        module,
-                    });
+                    self.report_error(
+                        span,
+                        ResolutionError::FailedToResolve {
+                            segment: Some(segment_name),
+                            label,
+                            suggestion,
+                            module,
+                        },
+                    );
                 }
                 return None;
             }
@@ -1500,7 +1516,7 @@ fn import_path_to_string(names: &[Ident], import_kind: &ImportKind<'_>, span: Sp
     let global = !names.is_empty() && names[0].name == kw::PathRoot;
     if let Some(pos) = pos {
         let names = if global { &names[1..pos + 1] } else { &names[..pos + 1] };
-        names_to_string(&names.iter().map(|ident| ident.name).collect::<Vec<_>>())
+        names_to_string(names.iter().map(|ident| ident.name))
     } else {
         let names = if global { &names[1..] } else { names };
         if names.is_empty() {
@@ -1508,7 +1524,7 @@ fn import_path_to_string(names: &[Ident], import_kind: &ImportKind<'_>, span: Sp
         } else {
             format!(
                 "{}::{}",
-                names_to_string(&names.iter().map(|ident| ident.name).collect::<Vec<_>>()),
+                names_to_string(names.iter().map(|ident| ident.name)),
                 import_kind_to_string(import_kind),
             )
         }

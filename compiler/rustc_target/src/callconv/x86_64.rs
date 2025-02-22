@@ -6,7 +6,7 @@ use rustc_abi::{
     Variants,
 };
 
-use crate::abi::call::{ArgAbi, CastTarget, FnAbi};
+use crate::callconv::{ArgAbi, CastTarget, FnAbi};
 
 /// Classification of "eightbyte" components.
 // N.B., the order of the variants is from general to specific,
@@ -51,8 +51,6 @@ where
         }
 
         let mut c = match layout.backend_repr {
-            BackendRepr::Uninhabited => return Ok(()),
-
             BackendRepr::Scalar(scalar) => match scalar.primitive() {
                 Primitive::Int(..) | Primitive::Pointer(_) => Class::Int,
                 Primitive::Float(_) => Class::Sse,

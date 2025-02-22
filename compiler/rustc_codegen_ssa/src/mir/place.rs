@@ -1,7 +1,7 @@
 use rustc_abi::Primitive::{Int, Pointer};
 use rustc_abi::{Align, BackendRepr, FieldsShape, Size, TagEncoding, VariantIdx, Variants};
+use rustc_middle::mir::PlaceTy;
 use rustc_middle::mir::interpret::Scalar;
-use rustc_middle::mir::tcx::PlaceTy;
 use rustc_middle::ty::layout::{HasTyCtxt, LayoutOf, TyAndLayout};
 use rustc_middle::ty::{self, Ty};
 use rustc_middle::{bug, mir};
@@ -474,10 +474,10 @@ impl<'a, 'tcx, Bx: BuilderMethods<'a, 'tcx>> FunctionCx<'a, 'tcx, Bx> {
             LocalRef::Operand(..) => {
                 if place_ref.is_indirect_first_projection() {
                     base = 1;
-                    let cg_base = self.codegen_consume(bx, mir::PlaceRef {
-                        projection: &place_ref.projection[..0],
-                        ..place_ref
-                    });
+                    let cg_base = self.codegen_consume(
+                        bx,
+                        mir::PlaceRef { projection: &place_ref.projection[..0], ..place_ref },
+                    );
                     cg_base.deref(bx.cx())
                 } else {
                     bug!("using operand local {:?} as place", place_ref);

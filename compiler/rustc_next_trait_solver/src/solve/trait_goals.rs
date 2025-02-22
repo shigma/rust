@@ -1,13 +1,14 @@
 //! Dealing with trait goals, i.e. `T: Trait<'a, U>`.
 
-use rustc_ast_ir::Movability;
 use rustc_type_ir::data_structures::IndexSet;
 use rustc_type_ir::fast_reject::DeepRejectCtxt;
 use rustc_type_ir::inherent::*;
 use rustc_type_ir::lang_items::TraitSolverLangItem;
 use rustc_type_ir::solve::CanonicalResponse;
 use rustc_type_ir::visit::TypeVisitableExt as _;
-use rustc_type_ir::{self as ty, Interner, TraitPredicate, TypingMode, Upcast as _, elaborate};
+use rustc_type_ir::{
+    self as ty, Interner, Movability, TraitPredicate, TypingMode, Upcast as _, elaborate,
+};
 use tracing::{instrument, trace};
 
 use crate::delegate::SolverDelegate;
@@ -342,18 +343,21 @@ where
         // (FIXME: technically we only need to check this if the type is a fn ptr...)
         let output_is_sized_pred = tupled_inputs_and_output_and_coroutine.map_bound(
             |AsyncCallableRelevantTypes { output_coroutine_ty, .. }| {
-                ty::TraitRef::new(cx, cx.require_lang_item(TraitSolverLangItem::Sized), [
-                    output_coroutine_ty,
-                ])
+                ty::TraitRef::new(
+                    cx,
+                    cx.require_lang_item(TraitSolverLangItem::Sized),
+                    [output_coroutine_ty],
+                )
             },
         );
 
         let pred = tupled_inputs_and_output_and_coroutine
             .map_bound(|AsyncCallableRelevantTypes { tupled_inputs_ty, .. }| {
-                ty::TraitRef::new(cx, goal.predicate.def_id(), [
-                    goal.predicate.self_ty(),
-                    tupled_inputs_ty,
-                ])
+                ty::TraitRef::new(
+                    cx,
+                    goal.predicate.def_id(),
+                    [goal.predicate.self_ty(), tupled_inputs_ty],
+                )
             })
             .upcast(cx);
         Self::probe_and_consider_implied_clause(
@@ -619,6 +623,101 @@ where
                 assume,
             )?;
             ecx.evaluate_added_goals_and_make_canonical_response(certainty)
+        })
+    }
+
+    /// NOTE: This is implemented as a built-in goal and not a set of impls like:
+    ///
+    /// ```rust,ignore (illustrative)
+    /// impl<T> BikeshedGuaranteedNoDrop for T where T: Copy {}
+    /// impl<T> BikeshedGuaranteedNoDrop for ManuallyDrop<T> {}
+    /// ```
+    ///
+    /// because these impls overlap, and I'd rather not build a coherence hack for
+    /// this harmless overlap.
+    fn consider_builtin_bikeshed_guaranteed_no_drop_candidate(
+        ecx: &mut EvalCtxt<'_, D>,
+        goal: Goal<I, Self>,
+    ) -> Result<Candidate<I>, NoSolution> {
+        if goal.predicate.polarity != ty::PredicatePolarity::Positive {
+            return Err(NoSolution);
+        }
+
+        let cx = ecx.cx();
+        ecx.probe_builtin_trait_candidate(BuiltinImplSource::Misc).enter(|ecx| {
+            let ty = goal.predicate.self_ty();
+            match ty.kind() {
+                // `&mut T` and `&T` always implement `BikeshedGuaranteedNoDrop`.
+                ty::Ref(..) => {}
+                // `ManuallyDrop<T>` always implements `BikeshedGuaranteedNoDrop`.
+                ty::Adt(def, _) if def.is_manually_drop() => {}
+                // Arrays and tuples implement `BikeshedGuaranteedNoDrop` only if
+                // their constituent types implement `BikeshedGuaranteedNoDrop`.
+                ty::Tuple(tys) => {
+                    ecx.add_goals(
+                        GoalSource::ImplWhereBound,
+                        tys.iter().map(|elem_ty| {
+                            goal.with(cx, ty::TraitRef::new(cx, goal.predicate.def_id(), [elem_ty]))
+                        }),
+                    );
+                }
+                ty::Array(elem_ty, _) => {
+                    ecx.add_goal(
+                        GoalSource::ImplWhereBound,
+                        goal.with(cx, ty::TraitRef::new(cx, goal.predicate.def_id(), [elem_ty])),
+                    );
+                }
+
+                // All other types implement `BikeshedGuaranteedNoDrop` only if
+                // they implement `Copy`. We could be smart here and short-circuit
+                // some trivially `Copy`/`!Copy` types, but there's no benefit.
+                ty::FnDef(..)
+                | ty::FnPtr(..)
+                | ty::Error(_)
+                | ty::Uint(_)
+                | ty::Int(_)
+                | ty::Infer(ty::IntVar(_) | ty::FloatVar(_))
+                | ty::Bool
+                | ty::Float(_)
+                | ty::Char
+                | ty::RawPtr(..)
+                | ty::Never
+                | ty::Pat(..)
+                | ty::Dynamic(..)
+                | ty::Str
+                | ty::Slice(_)
+                | ty::Foreign(..)
+                | ty::Adt(..)
+                | ty::Alias(..)
+                | ty::Param(_)
+                | ty::Placeholder(..)
+                | ty::Closure(..)
+                | ty::CoroutineClosure(..)
+                | ty::Coroutine(..)
+                | ty::UnsafeBinder(_)
+                | ty::CoroutineWitness(..) => {
+                    ecx.add_goal(
+                        GoalSource::ImplWhereBound,
+                        goal.with(
+                            cx,
+                            ty::TraitRef::new(
+                                cx,
+                                cx.require_lang_item(TraitSolverLangItem::Copy),
+                                [ty],
+                            ),
+                        ),
+                    );
+                }
+
+                ty::Bound(..)
+                | ty::Infer(
+                    ty::TyVar(_) | ty::FreshTy(_) | ty::FreshIntTy(_) | ty::FreshFloatTy(_),
+                ) => {
+                    panic!("unexpected type `{ty:?}`")
+                }
+            }
+
+            ecx.evaluate_added_goals_and_make_canonical_response(Certainty::Yes)
         })
     }
 
@@ -975,9 +1074,11 @@ where
             GoalSource::ImplWhereBound,
             goal.with(
                 cx,
-                ty::TraitRef::new(cx, cx.require_lang_item(TraitSolverLangItem::Unsize), [
-                    a_tail_ty, b_tail_ty,
-                ]),
+                ty::TraitRef::new(
+                    cx,
+                    cx.require_lang_item(TraitSolverLangItem::Unsize),
+                    [a_tail_ty, b_tail_ty],
+                ),
             ),
         );
         self.probe_builtin_trait_candidate(BuiltinImplSource::Misc)
@@ -1015,9 +1116,11 @@ where
             GoalSource::ImplWhereBound,
             goal.with(
                 cx,
-                ty::TraitRef::new(cx, cx.require_lang_item(TraitSolverLangItem::Unsize), [
-                    a_last_ty, b_last_ty,
-                ]),
+                ty::TraitRef::new(
+                    cx,
+                    cx.require_lang_item(TraitSolverLangItem::Unsize),
+                    [a_last_ty, b_last_ty],
+                ),
             ),
         );
         self.probe_builtin_trait_candidate(BuiltinImplSource::TupleUnsizing)

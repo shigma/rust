@@ -220,12 +220,11 @@ impl ExternalCrate {
             None
         };
         if root.is_local() {
-            tcx.hir()
-                .root_module()
+            tcx.hir_root_module()
                 .item_ids
                 .iter()
                 .filter_map(|&id| {
-                    let item = tcx.hir().item(id);
+                    let item = tcx.hir_item(id);
                     match item.kind {
                         hir::ItemKind::Mod(_) => {
                             as_keyword(Res::Def(DefKind::Mod, id.owner_id.to_def_id()))
@@ -277,12 +276,11 @@ impl ExternalCrate {
         };
 
         if root.is_local() {
-            tcx.hir()
-                .root_module()
+            tcx.hir_root_module()
                 .item_ids
                 .iter()
                 .filter_map(|&id| {
-                    let item = tcx.hir().item(id);
+                    let item = tcx.hir_item(id);
                     match item.kind {
                         hir::ItemKind::Mod(_) => {
                             as_primitive(Res::Def(DefKind::Mod, id.owner_id.to_def_id()))
@@ -1253,10 +1251,13 @@ impl GenericBound {
     }
 
     pub(crate) fn maybe_sized(cx: &mut DocContext<'_>) -> GenericBound {
-        Self::sized_with(cx, hir::TraitBoundModifiers {
-            polarity: hir::BoundPolarity::Maybe(DUMMY_SP),
-            constness: hir::BoundConstness::Never,
-        })
+        Self::sized_with(
+            cx,
+            hir::TraitBoundModifiers {
+                polarity: hir::BoundPolarity::Maybe(DUMMY_SP),
+                constness: hir::BoundConstness::Never,
+            },
+        )
     }
 
     fn sized_with(cx: &mut DocContext<'_>, modifiers: hir::TraitBoundModifiers) -> GenericBound {
@@ -2119,9 +2120,8 @@ impl Discriminant {
     /// Will be `None` in the case of cross-crate reexports, and may be
     /// simplified
     pub(crate) fn expr(&self, tcx: TyCtxt<'_>) -> Option<String> {
-        self.expr.map(|body| {
-            rendered_const(tcx, tcx.hir().body(body), tcx.hir().body_owner_def_id(body))
-        })
+        self.expr
+            .map(|body| rendered_const(tcx, tcx.hir_body(body), tcx.hir_body_owner_def_id(body)))
     }
     pub(crate) fn value(&self, tcx: TyCtxt<'_>, with_underscores: bool) -> String {
         print_evaluated_const(tcx, self.value, with_underscores, false).unwrap()
@@ -2417,7 +2417,7 @@ impl ConstantKind {
             ConstantKind::Path { ref path } => path.to_string(),
             ConstantKind::Extern { def_id } => print_inlined_const(tcx, def_id),
             ConstantKind::Local { body, .. } | ConstantKind::Anonymous { body } => {
-                rendered_const(tcx, tcx.hir().body(body), tcx.hir().body_owner_def_id(body))
+                rendered_const(tcx, tcx.hir_body(body), tcx.hir_body_owner_def_id(body))
             }
             ConstantKind::Infer { .. } => "_".to_string(),
         }

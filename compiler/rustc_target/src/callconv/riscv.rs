@@ -9,7 +9,7 @@ use rustc_abi::{
     TyAbiInterface, TyAndLayout, Variants,
 };
 
-use crate::abi::call::{ArgAbi, ArgExtension, CastTarget, FnAbi, PassMode, Uniform};
+use crate::callconv::{ArgAbi, ArgExtension, CastTarget, FnAbi, PassMode, Uniform};
 use crate::spec::HasTargetSpec;
 
 #[derive(Copy, Clone)]
@@ -86,7 +86,7 @@ where
                 }
             }
         },
-        BackendRepr::Vector { .. } | BackendRepr::Uninhabited => return Err(CannotUseFpConv),
+        BackendRepr::Vector { .. } => return Err(CannotUseFpConv),
         BackendRepr::ScalarPair(..) | BackendRepr::Memory { .. } => match arg_layout.fields {
             FieldsShape::Primitive => {
                 unreachable!("aggregates can't have `FieldsShape::Primitive`")

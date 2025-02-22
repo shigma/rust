@@ -233,11 +233,14 @@ impl LintStore {
     }
 
     pub fn register_group_alias(&mut self, lint_name: &'static str, alias: &'static str) {
-        self.lint_groups.insert(alias, LintGroup {
-            lint_ids: vec![],
-            is_externally_loaded: false,
-            depr: Some(LintAlias { name: lint_name, silent: true }),
-        });
+        self.lint_groups.insert(
+            alias,
+            LintGroup {
+                lint_ids: vec![],
+                is_externally_loaded: false,
+                depr: Some(LintAlias { name: lint_name, silent: true }),
+            },
+        );
     }
 
     pub fn register_group(
@@ -252,11 +255,14 @@ impl LintStore {
             .insert(name, LintGroup { lint_ids: to, is_externally_loaded, depr: None })
             .is_none();
         if let Some(deprecated) = deprecated_name {
-            self.lint_groups.insert(deprecated, LintGroup {
-                lint_ids: vec![],
-                is_externally_loaded,
-                depr: Some(LintAlias { name, silent: false }),
-            });
+            self.lint_groups.insert(
+                deprecated,
+                LintGroup {
+                    lint_ids: vec![],
+                    is_externally_loaded,
+                    depr: Some(LintAlias { name, silent: false }),
+                },
+            );
         }
 
         if !new {
@@ -922,7 +928,7 @@ impl<'tcx> LateContext<'tcx> {
         while let hir::ExprKind::Path(ref qpath) = expr.kind
             && let Some(parent_node) = match self.qpath_res(qpath, expr.hir_id) {
                 Res::Local(hir_id) => Some(self.tcx.parent_hir_node(hir_id)),
-                Res::Def(_, def_id) => self.tcx.hir().get_if_local(def_id),
+                Res::Def(_, def_id) => self.tcx.hir_get_if_local(def_id),
                 _ => None,
             }
             && let Some(init) = match parent_node {
@@ -930,7 +936,7 @@ impl<'tcx> LateContext<'tcx> {
                 hir::Node::LetStmt(hir::LetStmt { init, .. }) => *init,
                 hir::Node::Item(item) => match item.kind {
                     hir::ItemKind::Const(.., body_id) | hir::ItemKind::Static(.., body_id) => {
-                        Some(self.tcx.hir().body(body_id).value)
+                        Some(self.tcx.hir_body(body_id).value)
                     }
                     _ => None,
                 },
