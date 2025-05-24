@@ -287,6 +287,7 @@
 #![feature(cfi_encoding)]
 #![feature(char_max_len)]
 #![feature(concat_idents)]
+#![feature(core_float_math)]
 #![feature(decl_macro)]
 #![feature(deprecated_suggestion)]
 #![feature(doc_cfg)]
@@ -304,7 +305,6 @@
 #![feature(iter_advance_by)]
 #![feature(iter_next_chunk)]
 #![feature(lang_items)]
-#![feature(let_chains)]
 #![feature(link_cfg)]
 #![feature(linkage)]
 #![feature(macro_metavar_expr_concat)]
@@ -325,6 +325,7 @@
 #![feature(try_blocks)]
 #![feature(try_trait_v2)]
 #![feature(type_alias_impl_trait)]
+#![feature(unsigned_signed_diff)]
 // tidy-alphabetical-end
 //
 // Library features (core):
@@ -699,8 +700,8 @@ mod panicking;
 #[allow(dead_code, unused_attributes, fuzzy_provenance_casts, unsafe_op_in_unsafe_fn)]
 mod backtrace_rs;
 
-#[unstable(feature = "cfg_match", issue = "115585")]
-pub use core::cfg_match;
+#[unstable(feature = "cfg_select", issue = "115585")]
+pub use core::cfg_select;
 #[unstable(
     feature = "concat_bytes",
     issue = "87555",
